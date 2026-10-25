@@ -44,8 +44,21 @@ const int PAGE_ABS         = 2;   // ABS wheel speeds (only polled while this pa
 const int PAGE_DTC         = 3;   // stored trouble code list
 const int PAGE_SNIFF       = 4;   // listen-only CAN sniffer (nothing is sent while it's shown)
 
-// Stored trouble codes kept for the DTC page (3 columns x 5 rows)
+// Stored trouble codes kept for the DTC page (3 columns x 5 rows); pending codes too
 const int MAX_DTCS = 15;
+
+// Gauge alarms: outside these limits a gauge flashes red and the status bar shows it on
+// every page. Gauges with a limit are also read in the background (every
+// ALARM_CHECK_INTERVAL_MS) while they're off screen. Which gauge uses which limit is set
+// in the metric table in display_ui.h; NO_ALARM there means no limit.
+#define NO_ALARM NAN
+const float ALARM_FICM_LOW_V      = 45.0;    // FICM main power below this (nominal ~48 V)
+const float ALARM_TFT_HIGH_F      = 220;     // transmission fluid above this
+const float ALARM_ECT_HIGH_F      = 230;     // coolant above this
+const float ALARM_VOLTS_LOW_V     = 11.8;    // system voltage below this (not charging)
+const float ALARM_VOLTS_HIGH_V    = 15.0;    // system voltage above this (overcharging)
+const unsigned long ALARM_CHECK_INTERVAL_MS = 2000;
+const unsigned long ALARM_BLINK_MS          = 500;
 
 // Live data refresh: the visible page is re-read this often (a refresh takes roughly
 // 100 ms per value, so in practice the page updates as fast as the truck answers)
@@ -116,6 +129,8 @@ extern String valWheelRear;        // single rear-axle (differential) speed sens
 extern bool hasDTCWarning;
 extern String dtcCodes[MAX_DTCS];   // decoded codes, e.g. "P0470"
 extern int dtcTotal;                // codes reported by the ECU (-1 = not read yet)
+extern String pendingCodes[MAX_DTCS];   // pending codes (Mode 07): detected once, not yet confirmed
+extern int pendingTotal;            // -1 = not read yet
 extern int absDtcTotal;             // codes reported by the ABS module (-1 = not read yet)
 
 // Fill all metrics with demo values (used while the truck isn't answering)

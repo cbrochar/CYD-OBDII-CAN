@@ -30,12 +30,17 @@ When the truck isn't answering it runs on demo values, so you can test the scree
   1. Transfer case · Turbo boost · Vehicle speed · Transmission temp
   2. FICM main power · Coolant temp · System volts · Engine RPM
   3. ABS: Left-front wheel speed · Right-front wheel speed · Rear axle speed · ABS status (warning triangle when the ABS module has stored codes)
-  4. Stored engine trouble codes (up to 15, e.g. `P0470`), red when codes are present, green when clear
+  4. Engine trouble codes (up to 15, e.g. `P0470`): stored codes in red, then pending codes in
+     yellow (detected once but not confirmed yet, so they show up before the check-engine light);
+     green when clear
   5. **CAN sniffer** (listen-only) with **SD card recording**, see [Listen-only sniffer](#listen-only-sniffer)
 - **Tap menu**: tap any gauge to get **NEXT PAGE** and **FULL SCREEN** buttons.
   Full screen shows that one gauge as large as it fits; tap again to go back.
-- **Status bar** that never scrolls: connection state, demo mode, retry countdown, and a
-  red warning when engine trouble codes are stored.
+- **Gauge alarms**: a gauge that goes out of range (low FICM voltage, hot transmission or
+  coolant, low or high system voltage) flashes red, and the status bar shows it on every page,
+  see [Gauge alarms](#gauge-alarms).
+- **Status bar** that never scrolls: connection state, demo mode, retry countdown, gauge alarms,
+  a red warning when engine trouble codes are stored and a yellow one for pending codes.
 - **Demo mode**: runs on sample values whenever the PCM isn't answering (key off, not plugged
   in), and probes it again every 5 seconds.
 - **Auto brightness**: the CYD's light sensor dims the screen at night and brings it back to full
@@ -105,6 +110,7 @@ These were confirmed on the truck with a PC and [`tools/obd_logger.py`](tools/) 
 | Coolant temp | PCM `7E0` | `221139` | raw / 256 °C → °F | ⚠️ Not yet confirmed |
 | Trans temp | PCM `7E0` | `221E1C` | raw / 8 °F | ⚠️ Not yet confirmed |
 | Engine trouble codes | PCM `7E0` | `03` | CAN Mode 03, multi-frame aware | ⚠️ Not yet confirmed |
+| Pending trouble codes | PCM `7E0` | `07` | CAN Mode 07, same format as Mode 03 | ⚠️ Not yet confirmed |
 | Transfer case | `418F02` | `2211B2` | 1 = 2H, 2 = 4H, 4 = 4L | ❌ Returns NO DATA; real module address needed |
 | Wheel speeds (LF/RF/rear) | ABS `760` | placeholders | placeholder scale | ❌ Placeholders; get real PIDs from FORScan |
 | ABS trouble codes | ABS `760` | `1800FF00` | KWP service 18 count | ⚠️ Not yet confirmed |
@@ -159,6 +165,33 @@ To boot straight onto the sniffer page, so nothing at all is sent until you tap 
 ```bash
 pio run -e sniffer -t upload
 ```
+
+## Gauge alarms
+
+A gauge whose value goes outside its limits gets a red frame and flashes solid red, and the
+status bar turns red with the reading, e.g. `[!] TRANS TEMP HIGH: 224 F`, on whatever page is
+showing. Gauges with limits are also read in the background every 2 seconds while they're on
+another page, so an alarm is never missed. Each alarm and its clearing are logged to serial
+(`ALARM` lines). Alarms only use live readings, never demo data.
+
+| Gauge | Alarm when | Setting in [`src/config.h`](src/config.h) |
+|---|---|---|
+| FICM main power | below 45.0 V | `ALARM_FICM_LOW_V` |
+| Trans temp | above 220 °F | `ALARM_TFT_HIGH_F` |
+| Coolant temp | above 230 °F | `ALARM_ECT_HIGH_F` |
+| System volts | below 11.8 V or above 15.0 V | `ALARM_VOLTS_LOW_V`, `ALARM_VOLTS_HIGH_V` |
+
+To change a limit, edit its value in `config.h` and upload again. To add a limit to another gauge,
+or remove one, edit the last two columns (low limit, high limit) of its row in the `metrics[]`
+table in [`src/display_ui.h`](src/display_ui.h); `NO_ALARM` means no limit. For example, to warn
+above 3,200 RPM:
+
+```cpp
+{"ENGINE RPM",     &valRPM,    "",    TFT_WHITE,   pollRPM,    NO_ALARM, 3200},
+```
+
+`ALARM_CHECK_INTERVAL_MS` (2000) sets how often off-screen gauges are checked, and
+`ALARM_BLINK_MS` (500) the flash speed.
 
 ## Auto brightness
 
@@ -268,8 +301,9 @@ pio run -e selftest -t upload
   sending real reply frames through the controller. Replies go through the same receive queue,
   filter and ISO-TP code as in the truck, including a multi-frame reply (7 stored codes), a
   "response pending" delay (trans temp) and a negative reply for unknown PIDs.
-- The gauges sweep through changing values, the codes page lists 7 codes, the ABS page shows
-  wheel speeds and 1 ABS code, and the sniffer page lists 15 fake broadcast IDs.
+- The gauges sweep through changing values (FICM, coolant and trans temp cross their alarm
+  limits now and then), the codes page lists 7 stored codes and 1 pending code, the ABS page
+  shows wheel speeds and 1 ABS code, and the sniffer page lists 15 fake broadcast IDs.
 - Every 90 seconds the simulated key goes off for 15 seconds, to test falling back to demo data
   and reconnecting.
 - The status bar starts with `SIM:` so the values can't be mistaken for real ones.
@@ -286,6 +320,7 @@ Everything you're likely to change is in [`src/config.h`](src/config.h):
 | `CAN_RETRY_INTERVAL_MS` | 5000 | How often the PCM is probed while it isn't answering |
 | `CAN_REPLY_TIMEOUT_MS` | 100 | How long to wait for a module's reply |
 | `CAN_MAX_MISSED_REPLIES` | 5 | PCM requests in a row without a reply before falling back to demo |
+| `ALARM_*` | see [Gauge alarms](#gauge-alarms) | Alarm limits for FICM, trans temp, coolant and system volts |
 | `AUTO_BRIGHTNESS` | true | Set the backlight from the light sensor (false = always full brightness) |
 | `BRIGHTNESS_MIN_PCT` | 10 | Night-time backlight level |
 | `LDR_DARK_RAW` / `LDR_BRIGHT_RAW` | 2000 / 0 | Sensor readings for the night floor / full brightness |
@@ -400,7 +435,7 @@ Ideas, bug reports and pull requests are welcome.
 
 ## Safety
 
-This project only **reads** data (services `01`, `03`, `22`, `18`). Don't add requests that
+This project only **reads** data (services `01`, `03`, `07`, `22`, `18`). Don't add requests that
 command modules (services `2E`, `2F`, `31`, `10`), since those can actuate hardware or change
 settings. Mount the display where it doesn't block your view, and don't operate it while
 driving.

@@ -16,8 +16,9 @@
 // Fake modules answer requests by sending real reply frames through the controller, so
 // replies go through the same receive queue, filter and ISO-TP code as on the truck:
 //   PCM 7E0 -> 7E8: 0100, 010B/0133/010C/0D/42, 2209D0, 221139, 221E1C, 03 (7 codes,
-//                   multi-frame), unknown 22 DIDs get a 7F 22 31 negative reply,
-//                   221E1C is answered after a 7F 22 78 "response pending"
+//                   multi-frame), 07 (1 pending code), unknown 22 DIDs get a 7F 22 31
+//                   negative reply, 221E1C is answered after a 7F 22 78 "response pending".
+//                   FICM, coolant and trans temp sweep past their alarm limits now and then.
 //   ABS 760 -> 768: 1800FF00 (1 code), wheel speeds 222B00/01/02
 // While the sniffer page is shown, 15 broadcast IDs are sent at 10-200 ms intervals.
 // Every 90 s the "key" goes off for 15 s and nothing answers, to test link loss/reconnect.
@@ -113,10 +114,10 @@ inline void simPcm(const uint8_t* req, int len) {
         uint16_t did = (req[1] << 8) | req[2], v;
         r[0] = 0x62; r[1] = req[1]; r[2] = req[2];
         switch (did) {
-            case 0x09D0: v = simWave(46.5, 49, 12000) * 256; break;   // FICM V x 256
-            case 0x1139: v = simWave(80, 95, 25000) * 256;   break;   // ECT degC x 256
+            case 0x09D0: v = simWave(44, 49, 20000) * 256;   break;   // FICM V x 256 (alarm < 45)
+            case 0x1139: v = simWave(80, 112, 40000) * 256;  break;   // ECT degC x 256 (alarm > 230 F = 110 C)
             case 0x1E1C: simNegative(RX, 0x22, 0x78);                  // "response pending" first
-                         v = simWave(150, 200, 25000) * 8;   break;   // TFT degF x 8
+                         v = simWave(150, 230, 30000) * 8;   break;   // TFT degF x 8 (alarm > 220)
             default:     simNegative(RX, 0x22, 0x31); return;          // request out of range
         }
         r[3] = v >> 8; r[4] = v;
@@ -130,6 +131,11 @@ inline void simPcm(const uint8_t* req, int len) {
         r[n++] = 7;
         for (uint16_t c : CODES) { r[n++] = c >> 8; r[n++] = c; }
         simReply(RX, r, n);   // 16 bytes: First Frame + 2 Consecutive Frames
+        return;
+    }
+    if (req[0] == 0x07) {
+        r[0] = 0x47; r[1] = 1; r[2] = 0x01; r[3] = 0x28;   // 1 pending code: P0128
+        simReply(RX, r, 4);
         return;
     }
     simNegative(RX, req[0], 0x11);   // service not supported
