@@ -97,6 +97,11 @@ inline void updateStatusBar(bool force = false) {
         bg = TFT_YELLOW;       fg = TFT_BLACK;
     }
 
+#ifdef CAN_SELF_TEST
+    if (canListenOnly) text = "SIM: SNIFFER (FAKE TRAFFIC)";
+    else               text = "SIM: " + text;   // everything on screen comes from the simulator
+#endif
+
     if (!force && text == lastText) return;
     lastText = text;
 

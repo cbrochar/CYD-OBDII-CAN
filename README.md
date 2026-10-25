@@ -154,6 +154,26 @@ To boot straight onto the sniffer page, so nothing at all is sent until you tap 
 pio run -e sniffer -t upload
 ```
 
+## Bench self-test (no transceiver)
+
+The `selftest` build checks the CAN code on the bench without a transceiver or a truck:
+
+```bash
+pio run -e selftest -t upload
+```
+
+- The CAN controller runs in no-ACK self-test mode with its TX looped back to RX **inside the
+  ESP32** (no jumper wire), so it receives every frame it sends.
+- A simulated truck in [`src/can_simulator.h`](src/can_simulator.h) answers each request by
+  sending real reply frames through the controller. Replies go through the same receive queue,
+  filter and ISO-TP code as in the truck, including a multi-frame reply (7 stored codes), a
+  "response pending" delay (trans temp) and a negative reply for unknown PIDs.
+- The gauges sweep through changing values, the codes page lists 7 codes, the ABS page shows
+  wheel speeds and 1 ABS code, and the sniffer page lists 15 fake broadcast IDs.
+- Every 90 seconds the simulated key goes off for 15 seconds, to test falling back to demo data
+  and reconnecting.
+- The status bar starts with `SIM:` so the values can't be mistaken for real ones.
+
 ## Configuration
 
 Everything you're likely to change is in [`src/config.h`](src/config.h):
@@ -181,13 +201,14 @@ screen are polled, so the table is the only place you need to change.
 
 ```
 CYD-OBDII-CAN/
-├── platformio.ini       Board, display pin setup (TFT_eSPI build flags), libraries, sniffer build
+├── platformio.ini       Board, display pin setup (TFT_eSPI build flags), libraries, sniffer / self-test builds
 ├── src/
 │   ├── config.h         Pins, tuning constants, shared declarations
 │   ├── globals.cpp      Shared objects and values, demo values
 │   ├── main.cpp         setup() / loop(): touch, refresh timing, connect/disconnect handling
 │   ├── obd_engine.h     CAN (TWAI + ISO-TP) requests, PID decoding, DTC reading
 │   ├── can_sniffer.h    Listen-only sniffer: per-ID table, change tracking, serial summary
+│   ├── can_simulator.h  Simulated truck for the bench self-test build
 │   └── display_ui.h     Gauge table, cards, full-screen gauge, tap menu, status bar, pages
 ├── hardware/
 │   └── case/            3D-printable case (STL files, credits, build notes)

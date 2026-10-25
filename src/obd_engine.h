@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "can_simulator.h"   // empty unless built with -D CAN_SELF_TEST
 
 // Parse two raw response hex string bytes into an unsigned int
 inline uint16_t parseHexBytes(String rawResponse, int startCharIndex) {
@@ -24,8 +25,14 @@ static bool canListenOnly = false;
 // Start the TWAI driver. Normal mode only accepts IDs 700-7FF (diagnostic replies), so
 // the truck's broadcast traffic doesn't fill the receive queue; listen-only accepts all.
 inline bool canBegin(bool listenOnly = false) {
+#ifdef CAN_SELF_TEST
+    // Self-test: no-ACK mode, TX looped back to RX on one pin, and the sniffer can't be
+    // truly listen-only since the fake broadcasts come from this controller
+    twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_TX_PIN, TWAI_MODE_NO_ACK);
+#else
     twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN,
                                                           listenOnly ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NORMAL);
+#endif
     g.rx_queue_len = listenOnly ? 128 : 32;
     twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
     twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
@@ -35,6 +42,9 @@ inline bool canBegin(bool listenOnly = false) {
     }
     canListenOnly = listenOnly;
     if (twai_driver_install(&g, &t, &f) != ESP_OK) return false;
+#ifdef CAN_SELF_TEST
+    simLoopbackPin();
+#endif
     return twai_start() == ESP_OK;
 }
 
@@ -76,7 +86,11 @@ inline bool canSend(uint32_t id, const uint8_t* data, uint8_t len) {
     msg.identifier = id;
     msg.data_length_code = 8;
     for (int i = 0; i < 8; i++) msg.data[i] = i < len ? data[i] : 0x00;   // pad to 8 bytes
-    return twai_transmit(&msg, pdMS_TO_TICKS(20)) == ESP_OK;
+    bool ok = twai_transmit(&msg, pdMS_TO_TICKS(20)) == ESP_OK;
+#ifdef CAN_SELF_TEST
+    if (ok) simOnFrame(id, msg.data);   // the fake modules answer through the controller
+#endif
+    return ok;
 }
 
 // Wait for the next frame from rxId; frames from other IDs are skipped

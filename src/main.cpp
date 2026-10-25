@@ -70,6 +70,9 @@ void loop() {
         if (wantListenOnly) sniffReset();
         updateStatusBar(true);
     }
+#ifdef CAN_SELF_TEST
+    simTick(canListenOnly);   // fake broadcasts for the sniffer, simulated key on/off
+#endif
     if (canListenOnly) sniffPoll();
 
     //    Connect / detect a dropped link: the PCM stops answering when the key is
