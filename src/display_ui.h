@@ -218,7 +218,7 @@ inline void drawDtcPageToCanvas() {
 // Sniffer page: one row per CAN ID (ID, data bytes, frames per second), bytes that
 // changed in the last SNIFF_HIGHLIGHT_MS in yellow. Tap the list for the next rows;
 // tap the footer (below SNIFF_FOOTER_Y) for the next page.
-const int SNIFF_ROWS     = 11;
+const int SNIFF_ROWS     = 10;   // leaves a tall footer to tap for the next page
 const int SNIFF_ROW_H    = 15;
 const int SNIFF_LIST_Y   = 26;
 const int SNIFF_FOOTER_Y = SNIFF_LIST_Y + SNIFF_ROWS * SNIFF_ROW_H + 2;

@@ -4,14 +4,16 @@
 #include "obd_engine.h"
 #include "can_sniffer.h"
 #include "display_ui.h"
+#include "power.h"
 
 void setup() {
     Serial.begin(115200);
     delay(500);
     logDebug("SYS_INIT", "Powering up ESP32 core subsystems...");
+    powerBegin();
 
-    pinMode(21, OUTPUT);
-    digitalWrite(21, HIGH);
+    pinMode(TFT_BACKLIGHT_PIN, OUTPUT);
+    digitalWrite(TFT_BACKLIGHT_PIN, HIGH);
 
     tft.init();
     tft.invertDisplay(true);
@@ -56,6 +58,7 @@ void setup() {
 
     updateStatusBar(true);
     drawCurrentScreen();
+    noteActivity();   // the idle timers start once the screen is up
 }
 
 void loop() {
@@ -73,7 +76,12 @@ void loop() {
 #ifdef CAN_SELF_TEST
     simTick(canListenOnly);   // fake broadcasts for the sniffer, simulated key on/off
 #endif
-    if (canListenOnly) sniffPoll();
+    if (canListenOnly) {
+        static uint32_t lastSniffTotal = 0;
+        sniffPoll();
+        if (sniffTotal != lastSniffTotal) noteActivity();   // the bus is awake
+        lastSniffTotal = sniffTotal;
+    }
 
     //    Connect / detect a dropped link: the PCM stops answering when the key is
     //    turned off, so several missed replies in a row means it's gone
@@ -86,6 +94,7 @@ void loop() {
         tryCanConnect();
         lastCanRetry = millis();
     }
+    if (isConnected && !canListenOnly) noteActivity();   // PCM answering: the truck is on
 
     // 1. React to connect / disconnect transitions
     if (isConnected != wasConnected) {
@@ -108,7 +117,8 @@ void loop() {
         int sy = constrain(map(pt.y, TOUCH_RAW_Y_MIN, TOUCH_RAW_Y_MAX, 0, 239), 0, 239);
         logDebug("TOUCH_ACT", "Tap -> RawX: " + String(pt.x) + ", RawY: " + String(pt.y) +
                               " | Screen: " + String(sx) + "," + String(sy));
-        handleTap(sx, sy);
+        if (screenIsOff) noteActivity();   // this tap only wakes the screen
+        else { noteActivity(); handleTap(sx, sy); }
     }
     wasTouched = touchedNow;
 
@@ -130,4 +140,7 @@ void loop() {
         lastBarCheck = millis();
         updateStatusBar();
     }
+
+    // 5. Battery protection: screen off, then deep sleep, when nothing is happening
+    powerTick();
 }

@@ -55,14 +55,15 @@ When the truck isn't answering it runs on demo values, so you can test the scree
 
 The transceiver connects to the CYD's **CN1** connector (the 4-pin JST: GND, IO22, IO27, 3.3V),
 so no soldering on the CYD is needed. The TX/RX pins are set in [`src/config.h`](src/config.h)
-(`CAN_TX_PIN`, `CAN_RX_PIN`).
+(`CAN_TX_PIN`, `CAN_RX_PIN`). RX has to stay on IO27 (or another RTC-capable pin) so that bus
+traffic can wake the board from deep sleep; IO22 can't do that.
 
 | CYD CN1 | SN65HVD230 board |
 |---|---|
 | 3.3V | 3V3 |
 | GND | GND |
-| IO27 | CTX (D) |
-| IO22 | CRX (R) |
+| IO22 | CTX (D) |
+| IO27 | CRX (R) |
 
 | SN65HVD230 board | OBD-II port |
 |---|---|
@@ -143,7 +144,7 @@ wheel speeds or the transfer case position, which are still unknown (see [Roadma
 - Each row is one CAN ID: the ID, its latest data bytes and how many frames per second it is
   sent. Bytes that changed in the last second are **yellow**, so you can watch which bytes move
   when you spin a wheel, shift the transfer case or press the brake.
-- **Tap the list** to show the next 11 IDs. **Tap the bottom row** (`NEXT PAGE >`) to leave.
+- **Tap the list** to show the next 10 IDs. **Tap the bottom row** (`NEXT PAGE >`) to leave.
 - Every 5 seconds the full ID list goes to the serial log (`CAN_SNIFF` lines), along with how
   many frames were missed if the receive queue filled up.
 
@@ -153,6 +154,26 @@ To boot straight onto the sniffer page, so nothing at all is sent until you tap 
 ```bash
 pio run -e sniffer -t upload
 ```
+
+## Battery protection
+
+The OBD port's power pin is live with the key off, so the display powers itself down when the
+truck goes quiet:
+
+1. After **2 minutes** with no activity the backlight turns off. A tap turns it back on (that
+   tap doesn't press anything on screen).
+2. After **5 minutes** the ESP32 goes into **deep sleep** with the screen off. It wakes up on
+   **CAN traffic** (the CAN RX pin going low as soon as any module talks, e.g. key on) or a
+   **tap**, and starts up as if it had just been powered on.
+
+"Activity" means the PCM answering requests, frames arriving on the sniffer page, or a tap. On
+the bench with no truck, the display sleeps after 5 minutes too; tap to wake it. Both times can be
+changed or turned off in [`src/config.h`](src/config.h).
+
+Deep sleep stops the ESP32 and the screen, but the rest of the CYD board (voltage regulator,
+USB-serial chip, power LED), the transceiver and a 12 V → 5 V converter still draw a few mA. Measure
+it before leaving the display wired to always-on power. For zero drain, power it from an
+ignition-switched fuse instead.
 
 ## Bench self-test (no transceiver)
 
@@ -180,12 +201,14 @@ Everything you're likely to change is in [`src/config.h`](src/config.h):
 
 | Setting | Default | What it does |
 |---|---|---|
-| `CAN_TX_PIN` / `CAN_RX_PIN` | 27 / 22 | GPIO pins to the transceiver's CTX / CRX |
+| `CAN_TX_PIN` / `CAN_RX_PIN` | 22 / 27 | GPIO pins to the transceiver's CTX / CRX |
 | `POLL_INTERVAL_MS` | 250 | How often the visible values are refreshed |
 | `DTC_SCAN_INTERVAL_MS` | 10000 | How often engine codes are re-checked when not on the codes page |
 | `CAN_RETRY_INTERVAL_MS` | 5000 | How often the PCM is probed while it isn't answering |
 | `CAN_REPLY_TIMEOUT_MS` | 100 | How long to wait for a module's reply |
 | `CAN_MAX_MISSED_REPLIES` | 5 | PCM requests in a row without a reply before falling back to demo |
+| `SCREEN_OFF_AFTER_MS` | 120000 | Backlight off after this long with no activity (0 = never) |
+| `SLEEP_AFTER_MS` | 300000 | Deep sleep after this long with no activity (0 = never) |
 | `MAX_SNIFF_IDS` | 64 | Most CAN IDs the sniffer keeps track of |
 | `SNIFF_LOG_INTERVAL_MS` | 5000 | How often the sniffer logs its ID list to serial |
 | `SNIFF_HIGHLIGHT_MS` | 1000 | How long a changed byte stays yellow on the sniffer page |
@@ -209,6 +232,7 @@ CYD-OBDII-CAN/
 │   ├── obd_engine.h     CAN (TWAI + ISO-TP) requests, PID decoding, DTC reading
 │   ├── can_sniffer.h    Listen-only sniffer: per-ID table, change tracking, serial summary
 │   ├── can_simulator.h  Simulated truck for the bench self-test build
+│   ├── power.h          Battery protection: screen off, deep sleep, wake on CAN or tap
 │   └── display_ui.h     Gauge table, cards, full-screen gauge, tap menu, status bar, pages
 ├── hardware/
 │   └── case/            3D-printable case (STL files, credits, build notes)
@@ -271,9 +295,8 @@ See [`tools/README.md`](tools/README.md) for the options and how to add Ford-spe
 - [x] Listen-only sniffer page to find broadcast values without sending requests
       (**not yet tested on a bus**)
 - [ ] Use the sniffer to find wheel-speed and transfer-case broadcasts
-- [ ] Confirm the device doesn't drain the truck battery with the key off. The OBD port's
-      power pin is live all the time, so a plugged-in adapter, and the CYD if it's powered
-      from an always-on source, keep drawing current while the truck is parked.
+- [ ] Measure the key-off current draw in deep sleep (screen-off and deep-sleep firmware are done
+      and tested on the bench; waking on CAN traffic still needs a transceiver to test)
 
 ## Contributing
 

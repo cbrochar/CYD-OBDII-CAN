@@ -16,8 +16,9 @@
 
 // CAN bus (ESP32 built-in TWAI controller) through a 3.3 V SN65HVD230 transceiver.
 // Both pins are on the CYD's CN1 connector (GND, IO22, IO27, 3.3V), which also powers it.
-#define CAN_TX_PIN    27   // ESP32 TX -> transceiver D (CTX)
-#define CAN_RX_PIN    22   // ESP32 RX <- transceiver R (CRX)
+// RX must be an RTC-capable pin (IO27 is, IO22 isn't) so bus traffic can wake deep sleep.
+#define CAN_TX_PIN    22   // ESP32 TX -> transceiver D (CTX)
+#define CAN_RX_PIN    27   // ESP32 RX <- transceiver R (CRX)
 
 // Touch calibration: raw XPT2046 readings at the screen edges (rotation 1).
 // Typical CYD values; if taps land on the wrong card, tap each corner and copy the
@@ -51,6 +52,12 @@ const unsigned long CAN_RETRY_INTERVAL_MS = 5000;
 const unsigned long CAN_REPLY_TIMEOUT_MS  = 100;
 // This many PCM requests in a row without a reply counts as the link being lost
 const int CAN_MAX_MISSED_REPLIES = 5;
+
+// Battery protection (power.h): with no activity (PCM answering, sniffer traffic or a
+// tap) the backlight goes off, then the board deep-sleeps until CAN traffic or a tap.
+// 0 turns that step off.
+const unsigned long SCREEN_OFF_AFTER_MS = 2UL * 60 * 1000;
+const unsigned long SLEEP_AFTER_MS      = 5UL * 60 * 1000;
 
 // Sniffer page: most IDs tracked, and how often the full ID list is logged to serial
 const int MAX_SNIFF_IDS                  = 64;
