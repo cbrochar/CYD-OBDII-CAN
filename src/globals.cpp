@@ -3,7 +3,7 @@
 // Hardware Instance Definitions
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite canvas = TFT_eSprite(&tft);
-XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
+TouchBitbang touch(XPT2046_CLK, XPT2046_MOSI, XPT2046_MISO, XPT2046_CS, XPT2046_IRQ);
 
 // State Flags
 bool isConnected = false;

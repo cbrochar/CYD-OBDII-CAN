@@ -33,7 +33,7 @@ inline bool canBegin(bool listenOnly = false) {
     twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN,
                                                           listenOnly ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NORMAL);
 #endif
-    g.rx_queue_len = listenOnly ? 128 : 32;
+    g.rx_queue_len = listenOnly ? 512 : 32;   // room for SD card write pauses while sniffing
     twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
     twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
     if (!listenOnly) {

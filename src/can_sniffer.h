@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "can_logger.h"
 
 // ---- Listen-only CAN sniffer ------------------------------------------------------
 // While the sniffer page is shown the controller is in listen-only mode and every frame
@@ -96,7 +97,12 @@ inline void sniffLogSummary() {
 // queue (128 frames) doesn't overflow on a busy bus.
 inline void sniffPoll() {
     twai_message_t msg;
-    while (twai_receive(&msg, 0) == ESP_OK) sniffRecord(msg);
+    while (twai_receive(&msg, 0) == ESP_OK) {
+        int64_t us = esp_timer_get_time();
+        sniffRecord(msg);
+        logFrame(msg, us);   // only writes while recording to SD
+    }
+    logTick();
 
     static unsigned long lastRate = 0, lastLog = 0;
     unsigned long now = millis();

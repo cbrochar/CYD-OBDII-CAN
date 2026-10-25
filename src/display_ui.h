@@ -216,19 +216,39 @@ inline void drawDtcPageToCanvas() {
 }
 
 // Sniffer page: one row per CAN ID (ID, data bytes, frames per second), bytes that
-// changed in the last SNIFF_HIGHLIGHT_MS in yellow. Tap the list for the next rows;
-// tap the footer (below SNIFF_FOOTER_Y) for the next page.
-const int SNIFF_ROWS     = 10;   // leaves a tall footer to tap for the next page
+// changed in the last SNIFF_HIGHLIGHT_MS in yellow. Tap the list for the next rows.
+// Footer buttons (below SNIFF_FOOTER_Y): REC/STOP the SD capture, MARK, NEXT page.
+const int SNIFF_ROWS     = 10;
 const int SNIFF_ROW_H    = 15;
 const int SNIFF_LIST_Y   = 26;
 const int SNIFF_FOOTER_Y = SNIFF_LIST_Y + SNIFF_ROWS * SNIFF_ROW_H + 2;
+const int SNIFF_BTN_Y    = SNIFF_FOOTER_Y + 4, SNIFF_BTN_H = 30, SNIFF_BTN_W = 100;
+const int SNIFF_BTN_X[3] = {4, 110, 216};   // REC, MARK, NEXT
+
+inline void drawSnifferButton(int i, const String& label, uint32_t color, bool filled) {
+    int x = SNIFF_BTN_X[i];
+    if (filled) canvas.fillRoundRect(x, SNIFF_BTN_Y, SNIFF_BTN_W, SNIFF_BTN_H, 6, color);
+    else        canvas.drawRoundRect(x, SNIFF_BTN_Y, SNIFF_BTN_W, SNIFF_BTN_H, 6, color);
+    canvas.setTextColor(filled ? TFT_WHITE : color, filled ? color : TFT_BLACK);
+    canvas.drawCentreString(label, x + SNIFF_BTN_W / 2, SNIFF_BTN_Y + 7, 2);
+}
 
 inline void drawSnifferPageToCanvas() {
+    int listPages = max(1, (sniffIdCount + SNIFF_ROWS - 1) / SNIFF_ROWS);
     canvas.setTextSize(1);
-    canvas.setTextColor(TFT_ORANGE, TFT_BLACK);
-    canvas.drawString("CAN SNIFFER", 6, 4, 2);
+    if (logRecording) {
+        // e.g. "REC CAN0003 12345": frames written so far, plus frames lost if the queue overflowed
+        twai_status_info_t st;
+        uint32_t missed = (twai_get_status_info(&st) == ESP_OK) ? st.rx_missed_count : 0;
+        canvas.setTextColor(TFT_RED, TFT_BLACK);
+        canvas.drawString("REC " + logName + " " + String(logFrames) + (missed ? " !" + String(missed) : ""), 6, 4, 2);
+    } else {
+        canvas.setTextColor(TFT_ORANGE, TFT_BLACK);
+        canvas.drawString("CAN SNIFFER", 6, 4, 2);
+    }
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
-    canvas.drawRightString(String(sniffIdCount) + " IDs  " + String(sniffBusRate) + " fr/s", 314, 4, 2);
+    canvas.drawRightString(String(sniffIdCount) + " IDs " + String(sniffBusRate) + "/s  " +
+                           String(sniffScroll / SNIFF_ROWS + 1) + "/" + String(listPages), 314, 4, 2);
     canvas.drawFastHLine(4, 22, 312, TFT_DARKGREY);
 
     if (sniffIdCount == 0) {
@@ -255,10 +275,12 @@ inline void drawSnifferPageToCanvas() {
         canvas.drawRightString(String(e.rate) + "/s", 314, y, 2);
     }
 
-    int listPages = max(1, (sniffIdCount + SNIFF_ROWS - 1) / SNIFF_ROWS);
-    canvas.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    canvas.drawString("LIST " + String(sniffScroll / SNIFF_ROWS + 1) + "/" + String(listPages), 6, PIP_Y - 3, 1);
-    canvas.drawRightString("NEXT PAGE >", 314, PIP_Y - 3, 1);
+    if (logRecording)  drawSnifferButton(0, "STOP", TFT_RED, true);
+    else if (logError) drawSnifferButton(0, "NO SD", TFT_DARKGREY, false);   // tap to retry
+    else               drawSnifferButton(0, "REC", TFT_RED, false);
+    drawSnifferButton(1, logMarks ? "MARK " + String(logMarks) : String("MARK"),
+                      logRecording ? TFT_YELLOW : TFT_DARKGREY, false);
+    drawSnifferButton(2, "NEXT >", TFT_WHITE, false);
 }
 
 // Builds one page (2x2 card grid, DTC list or sniffer, + page dots). Works the same connected or not.
@@ -280,6 +302,7 @@ inline void buildPage(int pageNum) {
         if (pageNum == PAGE_ABS) drawAbsStatusCard(COL_X[1], ROW_Y[1]);
     }
 
+    if (pageNum == PAGE_SNIFF) return;   // its footer holds buttons instead of page dots
     int pipStart = 160 - ((TOTAL_PAGES - 1) * 10);
     for (int i = 0; i < TOTAL_PAGES; i++) {
         uint32_t pipColor = (i == pageNum) ? TFT_WHITE : TFT_DARKGREY;
@@ -387,8 +410,8 @@ inline int metricAtPoint(int cx, int cy) {
 //   Full screen     -> back to the page
 //   Menu showing    -> NEXT PAGE / FULL SCREEN, or tap elsewhere to close it
 //   Tap on a gauge  -> show the menu for that gauge
-//   Sniffer list    -> next block of CAN IDs
-//   Tap elsewhere   -> next page (DTC page, ABS status card, sniffer footer)
+//   Sniffer list    -> next block of CAN IDs; sniffer footer -> REC/STOP, MARK, NEXT
+//   Tap elsewhere   -> next page (DTC page, ABS status card)
 inline void handleTap(int sx, int sy) {
     int cx = sx, cy = max(0, sy - CANVAS_Y);
 
@@ -407,6 +430,10 @@ inline void handleTap(int sx, int sy) {
     } else if (currentPage == PAGE_SNIFF && cy < SNIFF_FOOTER_Y) {
         sniffScroll += SNIFF_ROWS;   // next block of IDs, wrapping to the top
         if (sniffScroll >= sniffIdCount) sniffScroll = 0;
+    } else if (currentPage == PAGE_SNIFF && cx < SNIFF_BTN_X[1]) {
+        if (logRecording) logStop(); else logStart();
+    } else if (currentPage == PAGE_SNIFF && cx < SNIFF_BTN_X[2]) {
+        logMark();
     } else {
         int idx = metricAtPoint(cx, cy);
         if (idx < 0) {

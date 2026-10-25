@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "can_logger.h"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
 
@@ -47,6 +48,7 @@ inline void powerBegin() {
 inline void enterDeepSleep() {
     logDebug("POWER", "No activity for " + String(SLEEP_AFTER_MS / 1000) + " s, entering deep sleep "
                       "(wakes on CAN traffic or a tap)");
+    logStop();   // close an SD capture cleanly
     Serial.flush();
 
     twai_stop();

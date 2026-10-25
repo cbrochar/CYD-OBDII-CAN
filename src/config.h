@@ -4,10 +4,11 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
-#include <XPT2046_Touchscreen.h>
 #include "driver/twai.h"
+#include "touch_bitbang.h"
 
 // Hardware Pin Definitions for the Cheap Yellow Display (CYD)
+// Touch (XPT2046) is bit-banged so the SD card can have the second hardware SPI bus
 #define XPT2046_IRQ   36
 #define XPT2046_MOSI  32
 #define XPT2046_MISO  39
@@ -19,6 +20,12 @@
 // RX must be an RTC-capable pin (IO27 is, IO22 isn't) so bus traffic can wake deep sleep.
 #define CAN_TX_PIN    22   // ESP32 TX -> transceiver D (CTX)
 #define CAN_RX_PIN    27   // ESP32 RX <- transceiver R (CRX)
+
+// MicroSD slot (VSPI). Cards must be FAT32 (32 GB or smaller is simplest).
+#define SD_SCK_PIN    18
+#define SD_MISO_PIN   19
+#define SD_MOSI_PIN   23
+#define SD_CS_PIN     5
 
 // Touch calibration: raw XPT2046 readings at the screen edges (rotation 1).
 // Typical CYD values; if taps land on the wrong card, tap each corner and copy the
@@ -64,11 +71,13 @@ const int MAX_SNIFF_IDS                  = 64;
 const unsigned long SNIFF_LOG_INTERVAL_MS = 5000;
 // Bytes that changed within this time are highlighted on the sniffer page
 const unsigned long SNIFF_HIGHLIGHT_MS    = 1000;
+// While recording to SD, the log is flushed this often (a power cut loses at most this much)
+const unsigned long LOG_FLUSH_INTERVAL_MS = 2000;
 
 // Global Shared Subsystem Instances
 extern TFT_eSPI tft;
 extern TFT_eSprite canvas;
-extern XPT2046_Touchscreen touch;
+extern TouchBitbang touch;
 
 // Program Tracking States
 extern bool isConnected;             // true while the PCM answers requests

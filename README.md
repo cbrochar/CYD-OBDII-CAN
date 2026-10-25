@@ -31,7 +31,7 @@ When the truck isn't answering it runs on demo values, so you can test the scree
   2. FICM main power · Coolant temp · System volts · Engine RPM
   3. ABS: Left-front wheel speed · Right-front wheel speed · Rear axle speed · ABS status (warning triangle when the ABS module has stored codes)
   4. Stored engine trouble codes (up to 15, e.g. `P0470`), red when codes are present, green when clear
-  5. **CAN sniffer** (listen-only), see [Listen-only sniffer](#listen-only-sniffer)
+  5. **CAN sniffer** (listen-only) with **SD card recording**, see [Listen-only sniffer](#listen-only-sniffer)
 - **Tap menu**: tap any gauge to get **NEXT PAGE** and **FULL SCREEN** buttons.
   Full screen shows that one gauge as large as it fits; tap again to go back.
 - **Status bar** that never scrolls: connection state, demo mode, retry countdown, and a
@@ -46,6 +46,7 @@ When the truck isn't answering it runs on demo values, so you can test the scree
 | Part | Notes |
 |---|---|
 | ESP32-2432S028R ("Cheap Yellow Display") | 2.8" 320×240 ILI9341 screen, XPT2046 resistive touch |
+| microSD card (optional) | For recording CAN traffic. FAT32; any size up to 32 GB is simplest |
 | SN65HVD230 CAN transceiver board | 3.3 V CAN transceiver (the common blue "VP230" breakout). Do **not** use a 5 V TJA1050/MCP2551 board without level shifting. |
 | OBD-II plug or pigtail | Male J1962 connector to reach CAN-H / CAN-L |
 | 3D-printed case | [Modular CYD case](https://www.thingiverse.com/thing:6991968) by DanielBrunod, remixed from [ncmreynolds' CYD enclosure](https://www.thingiverse.com/thing:6308391) (CC BY-SA). STL files in [`hardware/case/`](hardware/case/) |
@@ -113,7 +114,8 @@ Turbo boost uses standard PID `0B`, which tops out at 255 kPa, so the gauge maxe
 ### 1. Tools
 - [VS Code](https://code.visualstudio.com/) with the **PlatformIO** (or pioarduino) extension
 - Libraries are installed automatically from `platformio.ini`:
-  `TFT_eSPI 2.5.43`, `XPT2046_Touchscreen` (CAN uses the ESP32's built-in TWAI driver)
+  `TFT_eSPI 2.5.43`. CAN uses the ESP32's built-in TWAI driver, the SD card the built-in `SD`
+  library, and touch has its own small driver ([`src/touch_bitbang.h`](src/touch_bitbang.h))
 
 ### 2. Wire the transceiver
 See [Wiring](#wiring). If you used other GPIO pins, change `CAN_TX_PIN` / `CAN_RX_PIN` in
@@ -144,7 +146,8 @@ wheel speeds or the transfer case position, which are still unknown (see [Roadma
 - Each row is one CAN ID: the ID, its latest data bytes and how many frames per second it is
   sent. Bytes that changed in the last second are **yellow**, so you can watch which bytes move
   when you spin a wheel, shift the transfer case or press the brake.
-- **Tap the list** to show the next 10 IDs. **Tap the bottom row** (`NEXT PAGE >`) to leave.
+- **Tap the list** to show the next 10 IDs. The bottom row has three buttons:
+  **REC / STOP** (SD recording, below), **MARK** and **NEXT >** (leave the page).
 - Every 5 seconds the full ID list goes to the serial log (`CAN_SNIFF` lines), along with how
   many frames were missed if the receive queue filled up.
 
@@ -174,6 +177,27 @@ Deep sleep stops the ESP32 and the screen, but the rest of the CYD board (voltag
 USB-serial chip, power LED), the transceiver and a 12 V → 5 V converter still draw a few mA. Measure
 it before leaving the display wired to always-on power. For zero drain, power it from an
 ignition-switched fuse instead.
+
+### Recording to the SD card
+
+Put a FAT32 microSD card in the CYD's slot (it can go in while the display is running), open the
+sniffer page and tap **REC**. The header turns red and shows the file name and how many frames
+have been written, e.g. `REC CAN0003 12345`. Tap **STOP** when done; leaving the page or the
+display going to sleep also stops it.
+
+- Each recording is a new pair of files: `CAN0001.LOG`, `CAN0002.LOG`, ...
+- **`CANnnnn.LOG`** has every frame in `candump` log format, one per line:
+  `(0000123.456789) can0 4B0#1F861F8B1F901F95` (time in seconds since the CYD started, ID, data).
+  Open it in [SavvyCAN](https://www.savvycan.com/) (File → Load Log File, type *candump*), or with
+  python-can / cantools.
+- **`CANnnnn.TXT`** holds the notes: the start time and a line for each **MARK** tap, e.g.
+  `(0000051.516143) MARK 1`. Tap MARK the moment you do something (shift the transfer case,
+  brake, turn the wheel), then look at the log around that time for the bytes that changed.
+- The log is written to the card every 2 seconds, so unplugging the display loses at most the
+  last 2 seconds.
+- If the header shows `!` and a number, that many frames were dropped because the receive queue
+  filled up (the card was too slow for a moment).
+- `NO SD` on the button means no card was found; insert one and tap it again.
 
 ## Bench self-test (no transceiver)
 
@@ -212,6 +236,7 @@ Everything you're likely to change is in [`src/config.h`](src/config.h):
 | `MAX_SNIFF_IDS` | 64 | Most CAN IDs the sniffer keeps track of |
 | `SNIFF_LOG_INTERVAL_MS` | 5000 | How often the sniffer logs its ID list to serial |
 | `SNIFF_HIGHLIGHT_MS` | 1000 | How long a changed byte stays yellow on the sniffer page |
+| `LOG_FLUSH_INTERVAL_MS` | 2000 | How often an SD recording is saved to the card |
 | `MENU_TIMEOUT_MS` | 4000 | How long the tap menu stays up |
 | `TOUCH_RAW_*` | 200–3700 / 240–3800 | Touch calibration (the defaults work on the tested board) |
 
@@ -227,10 +252,12 @@ CYD-OBDII-CAN/
 ├── platformio.ini       Board, display pin setup (TFT_eSPI build flags), libraries, sniffer / self-test builds
 ├── src/
 │   ├── config.h         Pins, tuning constants, shared declarations
+│   ├── touch_bitbang.h  XPT2046 touch driver (bit-banged, frees the SPI bus for the SD card)
 │   ├── globals.cpp      Shared objects and values, demo values
 │   ├── main.cpp         setup() / loop(): touch, refresh timing, connect/disconnect handling
 │   ├── obd_engine.h     CAN (TWAI + ISO-TP) requests, PID decoding, DTC reading
 │   ├── can_sniffer.h    Listen-only sniffer: per-ID table, change tracking, serial summary
+│   ├── can_logger.h     SD card recording (candump .LOG + MARK notes .TXT)
 │   ├── can_simulator.h  Simulated truck for the bench self-test build
 │   ├── power.h          Battery protection: screen off, deep sleep, wake on CAN or tap
 │   └── display_ui.h     Gauge table, cards, full-screen gauge, tap menu, status bar, pages
@@ -294,7 +321,8 @@ See [`tools/README.md`](tools/README.md) for the options and how to add Ford-spe
       (TWAI + SN65HVD230; code done, **not yet tested in the truck**)
 - [x] Listen-only sniffer page to find broadcast values without sending requests
       (**not yet tested on a bus**)
-- [ ] Use the sniffer to find wheel-speed and transfer-case broadcasts
+- [x] Record sniffer traffic to the SD card with markers (tested on the bench with the self-test build)
+- [ ] Use the sniffer and SD recordings to find wheel-speed and transfer-case broadcasts
 - [ ] Measure the key-off current draw in deep sleep (screen-off and deep-sleep firmware are done
       and tested on the bench; waking on CAN traffic still needs a transceiver to test)
 

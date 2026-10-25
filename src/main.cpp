@@ -22,11 +22,12 @@ void setup() {
     delay(2500); // 2.5 second hold so the display text is readable
     tft.fillScreen(TFT_BLACK);
 
-    // Touch uses the default SPI object (VSPI); the TFT is on HSPI via -D USE_HSPI_PORT
-    SPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+    // The TFT is on HSPI (-D USE_HSPI_PORT), the SD card on VSPI (the default SPI object),
+    // and touch is bit-banged on its own pins
     touch.begin();
     touch.setRotation(1);
     logDebug("TOUCH_INIT", "XPT2046 Driver successfully initialized.");
+    sdBegin();   // not required: REC tries again, so a card can be inserted later
 
     canvas.setColorDepth(8);   // 8-bit sprite: 320x214 = ~67 KB instead of ~137 KB
     if (canvas.createSprite(320, CANVAS_H) == nullptr) {
@@ -69,6 +70,7 @@ void loop() {
     //    While sniffing, every waiting frame is read on each pass so the queue can't fill.
     bool wantListenOnly = currentPage == PAGE_SNIFF;
     if (wantListenOnly != canListenOnly && !canDriverFailed) {
+        if (!wantListenOnly) logStop();   // recording only runs on the sniffer page
         canSetListenOnly(wantListenOnly);
         if (wantListenOnly) sniffReset();
         updateStatusBar(true);
