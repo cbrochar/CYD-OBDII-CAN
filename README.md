@@ -251,6 +251,8 @@ display going to sleep also stops it.
 - If the header shows `!` and a number, that many frames were dropped because the receive queue
   filled up (the card was too slow for a moment).
 - `NO SD` on the button means no card was found; insert one and tap it again.
+- To find out which bytes changed at a MARK or between two recordings, use
+  [`tools/can_compare.py`](tools/README.md#can_comparepy) on the PC.
 
 ## Bench self-test (no transceiver)
 
@@ -321,7 +323,8 @@ CYD-OBDII-CAN/
 ├── hardware/
 │   └── case/            3D-printable case (STL files, credits, build notes)
 ├── tools/
-│   └── obd_logger.py    PC script that surveys the truck through a USB ELM327 and writes a log
+│   ├── obd_logger.py    PC script that surveys the truck through a USB ELM327 and writes a log
+│   └── can_compare.py   PC script that compares SD recordings to find which bytes carry a value
 ├── docs/                Reference captures from the truck
 └── test/
     └── serialLog.txt    Serial log captured in the truck (used to fix reply timing and FICM scaling)
