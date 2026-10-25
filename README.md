@@ -170,10 +170,46 @@ The light sensor on the front of the CYD (an LDR on GPIO34) sets the backlight b
   squared, so dusk and shade only dim the screen a little and it drops off near full darkness.
 - The reading is smoothed over about 3 seconds, so a passing shadow or headlights don't make the
   screen flicker.
-- Settings are in [`src/config.h`](src/config.h): `AUTO_BRIGHTNESS` (false = always full
-  brightness), `BRIGHTNESS_MIN_PCT` and the two calibration points. To recalibrate for your board,
-  set `LIGHT_LOG_INTERVAL_MS` to 500 and read the `LIGHT` lines in the serial log while you cover
-  and uncover the sensor.
+### Changing the brightness levels
+
+All the settings are in the "Auto brightness" block of [`src/config.h`](src/config.h). After
+changing one, upload again (`pio run -t upload`, or `-e sniffer` / `-e selftest` for those builds).
+
+| Setting | Default | What it does |
+|---|---|---|
+| `AUTO_BRIGHTNESS` | `true` | `false` turns auto brightness off: the screen is always at 100% |
+| `BRIGHTNESS_MIN_PCT` | `10` | Brightness in full darkness, in % (1–100) |
+| `LDR_DARK_RAW` | `2000` | Sensor reading at which the screen reaches `BRIGHTNESS_MIN_PCT` |
+| `LDR_BRIGHT_RAW` | `0` | Sensor reading at which the screen is at 100% |
+| `LIGHT_SMOOTHING_MS` | `3000` | How quickly the brightness follows the light, in ms (higher = slower and steadier) |
+| `LIGHT_LOG_INTERVAL_MS` | `0` | How often to log sensor readings, in ms (`0` = off; use `500` for calibration) |
+
+Common adjustments:
+
+- **Too dim at night / too bright at night:** raise / lower `BRIGHTNESS_MIN_PCT`, e.g. `20` or
+  `5`.
+- **Dims too early (at dusk or in shade):** raise `LDR_DARK_RAW`, e.g. `2400`; the screen then
+  only dims in deeper darkness.
+- **Doesn't dim enough at night:** lower `LDR_DARK_RAW`, e.g. `1000`, so a less dark cab already
+  counts as full darkness.
+- **Brightness hunts or flickers** (streetlights, shadows): raise `LIGHT_SMOOTHING_MS`, e.g.
+  `6000`. **Reacts too slowly** (tunnels): lower it, e.g. `1500`.
+
+### Recalibrating for your board
+
+The sensor's range differs between CYD boards, so if the defaults don't suit yours:
+
+1. In [`src/config.h`](src/config.h), set `LIGHT_LOG_INTERVAL_MS = 500` and upload.
+2. Open the serial monitor (`pio device monitor`). Twice a second it logs a line like
+   `(LIGHT): LDR raw 2587, smoothed 2555 -> backlight 10%`. `raw` is the sensor reading.
+3. Note the `raw` value in each lighting condition you care about: daylight, the cab at dusk,
+   the cab at night with the dash lights on, and fully covered.
+4. Set `LDR_BRIGHT_RAW` to the reading where you still want 100% (usually `0`) and
+   `LDR_DARK_RAW` to the reading where you want the night level.
+5. Set `LIGHT_LOG_INTERVAL_MS` back to `0` and upload again.
+
+On the board this was developed on, the readings were 0 in room light, 100–350 in shade and
+about 2,600 fully dark. Higher always means darker on the CYD.
 
 ## Battery protection
 
