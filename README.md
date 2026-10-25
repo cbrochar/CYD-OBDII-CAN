@@ -1,11 +1,14 @@
-# CYD-OBDII — Diesel Diagnostics Dash
+# CYD-OBDII-CAN — Diesel Diagnostics Dash (direct CAN)
 
 A touch-screen gauge display for a **2005 Ford Excursion 6.0L Powerstroke**, built on the
-ESP32 "Cheap Yellow Display" (CYD). It talks to the truck through a Bluetooth ELM327 OBD-II
-adapter and shows live engine, transmission and ABS data on swipeable pages of gauges,
-plus a list of stored trouble codes.
+ESP32 "Cheap Yellow Display" (CYD). It is wired **straight to the truck's CAN bus** through the
+ESP32's built-in CAN controller (TWAI) and a small 3.3 V transceiver, and shows live engine,
+transmission and ABS data on swipeable pages of gauges, plus a list of stored trouble codes.
 
-Without an adapter it runs on demo values, so you can test the screens on the bench.
+This is the CAN version of [CYD-OBDII](https://github.com/cbrochar/CYD-OBDII), which uses a
+Bluetooth ELM327 adapter instead. The screens, gauges and PIDs are the same.
+
+When the truck isn't answering it runs on demo values, so you can test the screens on the bench.
 
 | Page 1: gauges | Page 3: ABS |
 |---|---|
@@ -23,31 +26,56 @@ Without an adapter it runs on demo values, so you can test the screens on the be
 
 ## Features
 
-- **4 pages**, tap to move between them (page dots at the bottom show where you are)
+- **5 pages**, tap to move between them (page dots at the bottom show where you are)
   1. Transfer case · Turbo boost · Vehicle speed · Transmission temp
   2. FICM main power · Coolant temp · System volts · Engine RPM
   3. ABS: Left-front wheel speed · Right-front wheel speed · Rear axle speed · ABS status (warning triangle when the ABS module has stored codes)
   4. Stored engine trouble codes (up to 15, e.g. `P0470`), red when codes are present, green when clear
+  5. **CAN sniffer** (listen-only), see [Listen-only sniffer](#listen-only-sniffer)
 - **Tap menu**: tap any gauge to get **NEXT PAGE** and **FULL SCREEN** buttons.
   Full screen shows that one gauge as large as it fits; tap again to go back.
-- **Status bar** that never scrolls: connection state, demo mode, Bluetooth retry
-  countdown, and a red warning when engine trouble codes are stored.
-- **Demo mode**: runs on sample values whenever the adapter isn't connected, and keeps retrying
-  the connection in the background so the screen and touch never freeze.
-- **Fast polling**: only the values on screen are read from the truck, and every
-  request waits for the adapter's `>` prompt, so readings never get mixed up.
+- **Status bar** that never scrolls: connection state, demo mode, retry countdown, and a
+  red warning when engine trouble codes are stored.
+- **Demo mode**: runs on sample values whenever the PCM isn't answering (key off, not plugged
+  in), and probes it again every 5 seconds.
+- **Fast polling**: only the values on screen are read from the truck. Talking to the bus
+  directly takes a few milliseconds per value instead of about 100 ms through an ELM327.
 
 ## Hardware
 
 | Part | Notes |
 |---|---|
 | ESP32-2432S028R ("Cheap Yellow Display") | 2.8" 320×240 ILI9341 screen, XPT2046 resistive touch |
-| Bluetooth Classic ELM327 OBD-II adapter | Tested with an ELM327 v1.4b clone. Must be **Bluetooth Classic** (SPP), not BLE-only. |
+| SN65HVD230 CAN transceiver board | 3.3 V CAN transceiver (the common blue "VP230" breakout). Do **not** use a 5 V TJA1050/MCP2551 board without level shifting. |
+| OBD-II plug or pigtail | Male J1962 connector to reach CAN-H / CAN-L |
 | 3D-printed case | [Modular CYD case](https://www.thingiverse.com/thing:6991968) by DanielBrunod, remixed from [ncmreynolds' CYD enclosure](https://www.thingiverse.com/thing:6308391) (CC BY-SA). STL files in [`hardware/case/`](hardware/case/) |
 | USB power in the truck | 5 V via the CYD's USB port |
 
-No wiring is needed: the screen and touch are built into the CYD, and the adapter plugs
-into the truck's OBD-II port under the dash.
+## Wiring
+
+The transceiver connects to the CYD's **CN1** connector (the 4-pin JST: GND, IO22, IO27, 3.3V),
+so no soldering on the CYD is needed. The TX/RX pins are set in [`src/config.h`](src/config.h)
+(`CAN_TX_PIN`, `CAN_RX_PIN`).
+
+| CYD CN1 | SN65HVD230 board |
+|---|---|
+| 3.3V | 3V3 |
+| GND | GND |
+| IO27 | CTX (D) |
+| IO22 | CRX (R) |
+
+| SN65HVD230 board | OBD-II port |
+|---|---|
+| CANH | pin 6 (CAN-H) |
+| CANL | pin 14 (CAN-L) |
+| GND | pin 5 (signal ground) |
+
+- The truck's bus is already terminated (about 60 Ω between pins 6 and 14 with the key off).
+  Most SN65HVD230 boards have a 120 Ω resistor across CANH/CANL: **remove it** (or cut its
+  jumper), since a third terminator loads the truck's bus.
+- Keep the CANH/CANL wires twisted together and short.
+- Power the CYD from 5 V USB as before. If you power it from OBD pin 16 (battery, always on),
+  use a 12 V → 5 V buck converter and read the battery-drain to-do in the [Roadmap](#roadmap).
 
 ## Vehicle / bus facts
 
@@ -84,17 +112,11 @@ Turbo boost uses standard PID `0B`, which tops out at 255 kPa, so the gauge maxe
 ### 1. Tools
 - [VS Code](https://code.visualstudio.com/) with the **PlatformIO** (or pioarduino) extension
 - Libraries are installed automatically from `platformio.ini`:
-  `TFT_eSPI 2.5.43`, `ELMDuino 3.4.1`, `XPT2046_Touchscreen`
+  `TFT_eSPI 2.5.43`, `XPT2046_Touchscreen` (CAN uses the ESP32's built-in TWAI driver)
 
-### 2. Set your adapter's Bluetooth address
-In [`src/config.h`](src/config.h), replace the placeholder MAC with your adapter's address:
-
-```cpp
-const uint8_t ELM_MAC[6] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xBA};
-```
-
-You can find the address by pairing the adapter with a phone or PC and checking its Bluetooth
-details. The ESP32 connects with PIN `1234` (set in `src/main.cpp`).
+### 2. Wire the transceiver
+See [Wiring](#wiring). If you used other GPIO pins, change `CAN_TX_PIN` / `CAN_RX_PIN` in
+[`src/config.h`](src/config.h).
 
 ### 3. Build and upload
 Plug in the CYD over USB, then in PlatformIO: **Build**, then **Upload**. From a terminal:
@@ -105,9 +127,32 @@ pio device monitor        # 115200 baud
 ```
 
 ### 4. In the truck
-Plug in the adapter, turn the key on (engine running for the best data) and power the CYD.
-The status bar shows `BT OFFLINE - CONNECTING...` until the link is up, then
-`MONITOR ACTIVE - TAP TO SWIPE`.
+Plug into the OBD-II port, turn the key on (engine running for the best data) and power the
+CYD. The status bar shows `NO CAN REPLY - DEMO DATA - RETRY Ns` until the PCM answers, then
+`MONITOR ACTIVE - TAP TO SWIPE`. With the key off the PCM goes quiet and the display falls back
+to demo data after 5 missed replies.
+
+## Listen-only sniffer
+
+The last page is a CAN sniffer for finding values the truck broadcasts on its own, such as
+wheel speeds or the transfer case position, which are still unknown (see [Roadmap](#roadmap)).
+
+- While the page is shown, the controller is in **listen-only mode**: it sends nothing, not even
+  the ACK bit, so it can't disturb the bus. The status bar turns blue:
+  `CAN LISTEN-ONLY - NOTHING SENT`. Leaving the page switches back to normal polling.
+- Each row is one CAN ID: the ID, its latest data bytes and how many frames per second it is
+  sent. Bytes that changed in the last second are **yellow**, so you can watch which bytes move
+  when you spin a wheel, shift the transfer case or press the brake.
+- **Tap the list** to show the next 11 IDs. **Tap the bottom row** (`NEXT PAGE >`) to leave.
+- Every 5 seconds the full ID list goes to the serial log (`CAN_SNIFF` lines), along with how
+  many frames were missed if the receive queue filled up.
+
+To boot straight onto the sniffer page, so nothing at all is sent until you tap away from it
+(good for the first connection to the truck), flash the `sniffer` build:
+
+```bash
+pio run -e sniffer -t upload
+```
 
 ## Configuration
 
@@ -115,10 +160,15 @@ Everything you're likely to change is in [`src/config.h`](src/config.h):
 
 | Setting | Default | What it does |
 |---|---|---|
-| `ELM_MAC` | placeholder | Bluetooth address of your ELM327 |
+| `CAN_TX_PIN` / `CAN_RX_PIN` | 27 / 22 | GPIO pins to the transceiver's CTX / CRX |
 | `POLL_INTERVAL_MS` | 250 | How often the visible values are refreshed |
 | `DTC_SCAN_INTERVAL_MS` | 10000 | How often engine codes are re-checked when not on the codes page |
-| `BT_RETRY_INTERVAL_MS` | 10000 | Wait between Bluetooth connection attempts |
+| `CAN_RETRY_INTERVAL_MS` | 5000 | How often the PCM is probed while it isn't answering |
+| `CAN_REPLY_TIMEOUT_MS` | 100 | How long to wait for a module's reply |
+| `CAN_MAX_MISSED_REPLIES` | 5 | PCM requests in a row without a reply before falling back to demo |
+| `MAX_SNIFF_IDS` | 64 | Most CAN IDs the sniffer keeps track of |
+| `SNIFF_LOG_INTERVAL_MS` | 5000 | How often the sniffer logs its ID list to serial |
+| `SNIFF_HIGHLIGHT_MS` | 1000 | How long a changed byte stays yellow on the sniffer page |
 | `MENU_TIMEOUT_MS` | 4000 | How long the tap menu stays up |
 | `TOUCH_RAW_*` | 200–3700 / 240–3800 | Touch calibration (the defaults work on the tested board) |
 
@@ -130,13 +180,14 @@ screen are polled, so the table is the only place you need to change.
 ## Project structure
 
 ```
-CYD-OBDII/
-├── platformio.ini       Board, display pin setup (TFT_eSPI build flags), libraries
+CYD-OBDII-CAN/
+├── platformio.ini       Board, display pin setup (TFT_eSPI build flags), libraries, sniffer build
 ├── src/
-│   ├── config.h         Pins, tuning constants, adapter MAC, shared declarations
+│   ├── config.h         Pins, tuning constants, shared declarations
 │   ├── globals.cpp      Shared objects and values, demo values
 │   ├── main.cpp         setup() / loop(): touch, refresh timing, connect/disconnect handling
-│   ├── obd_engine.h     ELM327 communication, PID decoding, DTC reading, Bluetooth task
+│   ├── obd_engine.h     CAN (TWAI + ISO-TP) requests, PID decoding, DTC reading
+│   ├── can_sniffer.h    Listen-only sniffer: per-ID table, change tracking, serial summary
 │   └── display_ui.h     Gauge table, cards, full-screen gauge, tap menu, status bar, pages
 ├── hardware/
 │   └── case/            3D-printable case (STL files, credits, build notes)
@@ -163,36 +214,42 @@ See [`tools/README.md`](tools/README.md) for the options and how to add Ford-spe
 
 ## How it works
 
-- **Two cores:** Bluetooth connection attempts run in a background FreeRTOS task on
-  core 0. Drawing, touch and polling run in `loop()` on core 1, so a slow connect never
-  freezes the screen.
-- **Request/reply sync:** each command is sent and the reply is read up to the ELM `>`
-  prompt before the next one goes out. `ATSH` (set header) is only sent when the target
-  module changes. Fixed delays turned out to make replies arrive one request late over
-  Bluetooth.
+- **CAN transport:** the ESP32's TWAI controller runs at 500 kbps with 11-bit IDs. Each request
+  is an ISO-TP single frame to the module (e.g. `7E0`) and the reply comes from that ID + 8
+  (`7E8`). Long replies, such as many stored codes, arrive as a First Frame plus Consecutive
+  Frames; the firmware sends a Flow Control frame and joins them. Replies are turned into the
+  same hex text the ELM327 gave (e.g. `410C0AD6`), so the PID decoders are unchanged from
+  CYD-OBDII.
+- **Receive filter:** in normal mode only IDs `700`–`7FF` (diagnostic replies) are accepted, so
+  the truck's normal broadcast traffic never fills the receive queue. The sniffer reinstalls the
+  driver in listen-only mode with every ID accepted and a 128-frame queue.
+- **Bus errors:** if a request is never acknowledged (nothing on the bus) or the controller goes
+  bus-off, it is restarted before the next request.
 - **Drawing:** the gauge area is a 320×214 8-bit sprite (about 67 KB) drawn off-screen and
   pushed in one go, so updates don't flicker. Page changes slide horizontally.
 - **Debug log:** everything is logged over USB serial at 115200 with timestamps, e.g.
-  `010C -> 410C0AD6` or `Page 0 refreshed in 380 ms`.
+  `7E0 010C -> 410C0AD6` or `Page 0 refreshed in 20 ms`.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| Stuck on `BT OFFLINE - CONNECTING...` | Wrong `ELM_MAC`, adapter not powered (key off), or a BLE-only adapter |
-| `BT STACK FAILED - DEMO DATA` | ESP32 Bluetooth failed to start; power-cycle the CYD |
+| Stuck on `NO CAN REPLY` | Key off; CAN-H/CAN-L swapped; CTX/CRX swapped; no ground to OBD pin 5. The log shows `No ACK on the bus` when nothing on the bus acknowledges the frames |
+| `CAN DRIVER FAILED - DEMO DATA` | The TWAI driver didn't start; power-cycle the CYD |
 | A gauge stays at `---` | The truck doesn't answer that PID; check the serial log for `no valid reply` |
 | Taps hit the wrong gauge | Recalibrate `TOUCH_RAW_*` using the `Tap -> RawX/RawY` lines in the serial log |
-| Readings look swapped between gauges | Replies are out of sync; check for `Timeout waiting for '>'` in the log |
+| Values drop out or the log shows `Bus-off` | Extra 120 Ω terminator on the transceiver board, or long / untwisted CAN wires |
 
 ## Roadmap
 
 - [ ] Find the transfer case module and its address with FORScan (it may be on MS-CAN)
 - [ ] Real ABS wheel-speed PIDs and scaling
 - [ ] Confirm coolant temp, trans temp and DTC reads in a new truck log
-- [ ] Hard-wire the CYD to the CAN bus instead of using the Bluetooth ELM327 adapter
-      (the ESP32 has a built-in CAN controller, called TWAI; it needs a 3.3 V CAN transceiver
-      such as an SN65HVD230 and two free GPIO pins)
+- [x] Hard-wire the CYD to the CAN bus instead of using the Bluetooth ELM327 adapter
+      (TWAI + SN65HVD230; code done, **not yet tested in the truck**)
+- [x] Listen-only sniffer page to find broadcast values without sending requests
+      (**not yet tested on a bus**)
+- [ ] Use the sniffer to find wheel-speed and transfer-case broadcasts
 - [ ] Confirm the device doesn't drain the truck battery with the key off. The OBD port's
       power pin is live all the time, so a plugged-in adapter, and the CYD if it's powered
       from an always-on source, keep drawing current while the truck is parked.
@@ -204,7 +261,7 @@ Ideas, bug reports and pull requests are welcome.
 - **Know a Ford PID or module address?** The open [`help wanted`](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
   issues list what's still unknown (transfer case, ABS wheel speeds, temperature PIDs). Log
   output from [`tools/obd_logger.py`](tools/) or FORScan is the most useful thing you can add.
-- **Code feedback:** open an issue or start a thread in Discussions. The ELM327 reply handling in
+- **Code feedback:** open an issue or start a thread in Discussions. The CAN request handling in
   [`src/obd_engine.h`](src/obd_engine.h) and the drawing code in
   [`src/display_ui.h`](src/display_ui.h) are good places to start.
 - Please only add **read-only** requests (see Safety below).

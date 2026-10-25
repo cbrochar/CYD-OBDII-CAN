@@ -11,105 +11,193 @@ inline uint16_t parseHexBytes(String rawResponse, int startCharIndex) {
     return (uint16_t) strtol(byteHex.c_str(), NULL, 16);
 }
 
-// Send one command and read everything up to the ELM '>' prompt, so each reply is
-// always matched to the command that asked for it (fixed delays let replies arrive
-// one query late over Bluetooth). Returns the reply without spaces, lines split by '\n'.
-inline String elmCommand(const String& cmd, unsigned long timeoutMs = 500) {
-    while (SerialBT.available()) SerialBT.read();   // drop anything stale
-    SerialBT.print(cmd);
-    SerialBT.print("\r");
+// ---- CAN transport (ESP32 TWAI + ISO 15765-2 / ISO-TP) -----------------------
+// Truck is ISO 15765-4 CAN, 11-bit, 500 kbps (confirmed by the obd_logger capture).
+// Each request goes to a module's request ID and the reply comes back from ID + 8
+// (7E0 -> 7E8, 760 -> 768). Replies are returned as hex text with no spaces, the same
+// format the ELM327 gave (e.g. "410C0AD6"), so the decoders below didn't change.
 
-    String resp = "";
-    unsigned long start = millis();
-    while (millis() - start < timeoutMs) {
-        if (!SerialBT.available()) continue;
-        char c = SerialBT.read();
-        if (c == '>') return resp;
-        if (c == '\r' || c == '\n') {
-            if (resp.length() > 0 && !resp.endsWith("\n")) resp += '\n';
-        } else if (c != ' ') {
-            resp += c;
-        }
+// true while the controller is in listen-only mode (sniffer page): it sends nothing,
+// not even ACK bits, so it can't disturb the truck's bus
+static bool canListenOnly = false;
+
+// Start the TWAI driver. Normal mode only accepts IDs 700-7FF (diagnostic replies), so
+// the truck's broadcast traffic doesn't fill the receive queue; listen-only accepts all.
+inline bool canBegin(bool listenOnly = false) {
+    twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN,
+                                                          listenOnly ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NORMAL);
+    g.rx_queue_len = listenOnly ? 128 : 32;
+    twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
+    twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    if (!listenOnly) {
+        f.acceptance_code = (uint32_t)0x700 << 21;
+        f.acceptance_mask = ~((uint32_t)0x700 << 21);   // only the top 3 ID bits must match
     }
-    logDebug("OBD_WARN", "Timeout waiting for '>' after " + cmd + ". Raw: " + resp);
+    canListenOnly = listenOnly;
+    if (twai_driver_install(&g, &t, &f) != ESP_OK) return false;
+    return twai_start() == ESP_OK;
+}
+
+// Switch between normal (polling) and listen-only (sniffer) mode by reinstalling the driver
+inline void canSetListenOnly(bool on) {
+    if (on == canListenOnly || canDriverFailed) return;
+    logDebug("CAN_INIT", on ? "Switching to LISTEN-ONLY mode (nothing is sent)" : "Switching to normal mode");
+    twai_stop();
+    twai_driver_uninstall();
+    if (!canBegin(on)) {
+        logDebug("CAN_FATAL", "TWAI driver failed to restart!");
+        canDriverFailed = true;
+    }
+}
+
+// Restart the controller after a failed request. Aborts a frame nobody ACKed
+// (nothing else on the bus) and recovers from bus-off.
+inline void canReset() {
+    twai_status_info_t st;
+    if (twai_get_status_info(&st) != ESP_OK) return;
+    if (st.state == TWAI_STATE_BUS_OFF) {
+        logDebug("CAN_WARN", "Bus-off, recovering...");
+        twai_initiate_recovery();
+        unsigned long start = millis();
+        while (millis() - start < 500) {
+            if (twai_get_status_info(&st) == ESP_OK && st.state == TWAI_STATE_STOPPED) break;
+            delay(10);
+        }
+        twai_start();
+    } else if (st.state == TWAI_STATE_RUNNING && st.tx_error_counter >= 128) {
+        logDebug("CAN_WARN", "No ACK on the bus (TEC " + String(st.tx_error_counter) + "), restarting controller");
+        twai_stop();
+        twai_start();
+    }
+}
+
+inline bool canSend(uint32_t id, const uint8_t* data, uint8_t len) {
+    twai_message_t msg = {};
+    msg.identifier = id;
+    msg.data_length_code = 8;
+    for (int i = 0; i < 8; i++) msg.data[i] = i < len ? data[i] : 0x00;   // pad to 8 bytes
+    return twai_transmit(&msg, pdMS_TO_TICKS(20)) == ESP_OK;
+}
+
+// Wait for the next frame from rxId; frames from other IDs are skipped
+inline bool canReceive(uint32_t rxId, twai_message_t& msg, unsigned long deadline) {
+    while ((long)(deadline - millis()) > 0) {
+        if (twai_receive(&msg, pdMS_TO_TICKS(deadline - millis())) != ESP_OK) return false;
+        if (msg.identifier == rxId && !msg.extd && !msg.rtr && msg.data_length_code >= 1) return true;
+    }
+    return false;
+}
+
+// Send one request (hex text, e.g. "010C" or "2209D0") and return the reply payload as
+// hex text, or "NODATA". Multi-frame replies (First Frame + Consecutive Frames) are
+// joined, so "03" with many codes comes back as one string.
+inline String canRequest(uint32_t txId, const char* cmd, unsigned long timeoutMs = CAN_REPLY_TIMEOUT_MS) {
+    uint8_t sf[8] = {0};   // Single Frame: PCI byte = length, then the request bytes
+    uint8_t reqLen = 0;
+    for (const char* p = cmd; p[0] && p[1] && reqLen < 7; p += 2) {
+        char hex[3] = {p[0], p[1], 0};
+        sf[1 + reqLen++] = (uint8_t)strtol(hex, NULL, 16);
+    }
+    sf[0] = reqLen;
+
+    twai_clear_receive_queue();
+    if (!canSend(txId, sf, reqLen + 1)) {
+        canReset();
+        return "NODATA";
+    }
+
+    uint32_t rxId = txId + 8;
+    uint8_t payload[256];
+    int total = -1, have = 0;
+    uint8_t nextSeq = 1;
+    unsigned long deadline = millis() + timeoutMs;
+    twai_message_t msg;
+
+    while (canReceive(rxId, msg, deadline)) {
+        uint8_t pci = msg.data[0] >> 4;
+        if (pci == 0 && total < 0) {                       // Single Frame
+            int len = msg.data[0] & 0x0F;
+            if (len < 1 || len > 7) continue;
+            // 7F xx 78 = "response pending": the module needs more time, keep waiting
+            if (len >= 3 && msg.data[1] == 0x7F && msg.data[3] == 0x78) {
+                deadline = millis() + 1000;
+                continue;
+            }
+            memcpy(payload, msg.data + 1, len);
+            total = have = len;
+        } else if (pci == 1 && total < 0) {                // First Frame
+            total = min(((msg.data[0] & 0x0F) << 8) | msg.data[1], (int)sizeof(payload));
+            have = min(6, total);
+            memcpy(payload, msg.data + 2, have);
+            uint8_t fc[3] = {0x30, 0x00, 0x00};            // Flow Control: send the rest, no gap
+            canSend(txId, fc, 3);
+            deadline = millis() + timeoutMs;
+        } else if (pci == 2 && total > 0) {                // Consecutive Frame
+            if ((msg.data[0] & 0x0F) != nextSeq) {
+                logDebug("CAN_WARN", String(cmd) + " -> consecutive frame out of order");
+                return "NODATA";
+            }
+            nextSeq = (nextSeq + 1) & 0x0F;
+            int n = min(7, total - have);
+            memcpy(payload + have, msg.data + 1, n);
+            have += n;
+            deadline = millis() + timeoutMs;
+        }
+        if (total >= 0 && have >= total) break;
+    }
+
+    if (total < 0 || have < total) {
+        canReset();
+        return "NODATA";
+    }
+    String resp = "";
+    char hex[3];
+    for (int i = 0; i < total; i++) {
+        snprintf(hex, sizeof(hex), "%02X", payload[i]);
+        resp += hex;
+    }
     return resp;
 }
 
-// Header the ELM is currently set to; ATSH is only sent when it changes.
-// Cleared on every new connection, since the adapter is re-initialised.
-static String currentHeader = "";
-
-inline void setHeader(const char* header) {
-    if (currentHeader == header) return;
-    logDebug("OBD_BUS", "Setting target header to ATSH" + String(header));
-    elmCommand("ATSH" + String(header));
-    currentHeader = header;
+// Turn a module header ("7E0", "760") into its 11-bit request ID; 0 if it isn't one
+inline uint32_t headerToId(const char* header) {
+    uint32_t id = strtoul(header, NULL, 16);
+    return id <= 0x7FF ? id : 0;
 }
 
-// Single-frame query. Returns the reply line for this service (e.g. "41..." for 01,
-// "62..." for 22), or the raw reply (NODATA etc.) so callers' prefix checks fail.
+// PCM requests in a row without a reply; loop() drops to demo mode at CAN_MAX_MISSED_REPLIES
+static int missedPcmReplies = 0;
+
+// Single-frame query. Returns the reply for this service (e.g. "41..." for 01,
+// "62..." for 22), or "NODATA" so callers' prefix checks fail.
 inline String queryCustomPID(const char* header, const char* pid) {
     if (!isConnected) return "";
 
-    setHeader(header);
-    String resp = elmCommand(pid);
+    uint32_t id = headerToId(header);
+    if (id == 0) return "NODATA";   // not an 11-bit CAN address (e.g. the transfer case placeholder)
+    String resp = canRequest(id, pid);
+    if (id == 0x7E0) missedPcmReplies = (resp == "NODATA") ? missedPcmReplies + 1 : 0;
 
     char replyService[3] = {(char)(pid[0] + 4), pid[1], 0};   // 01 -> 41, 22 -> 62
-    int lineStart = 0;
-    while (lineStart < (int)resp.length()) {
-        int lineEnd = resp.indexOf('\n', lineStart);
-        if (lineEnd < 0) lineEnd = resp.length();
-        String line = resp.substring(lineStart, lineEnd);
-        lineStart = lineEnd + 1;
-        if (line.startsWith(replyService)) {
-            logDebug("OBD_BUS", String(pid) + " -> " + line);
-            return line;
-        }
+    if (resp.startsWith(replyService)) {
+        logDebug("OBD_BUS", String(header) + " " + pid + " -> " + resp);
+    } else {
+        logDebug("OBD_WARN", String(header) + " " + pid + " -> no valid reply: " + resp);
     }
-    resp.replace("\n", " ");
-    logDebug("OBD_WARN", String(pid) + " -> no valid reply: " + resp);
     return resp;
 }
 
-// Bluetooth connection attempt. Blocking, so it runs inside btConnectTask (core 0),
-// NOT in loop(). It must not touch the display or the metric Strings.
-inline void tryBluetoothConnect() {
-    logDebug("BT_CON", "Attempting background handshake with 'OBDII'...");
-    if (SerialBT.connect(const_cast<uint8_t*>(ELM_MAC))) {
-        logDebug("BT_CON", "Success! RFCOMM data channel initialized.");
-        myELM.begin(SerialBT, false, 2000, '6');
-
-        // Truck is ISO 15765-4 CAN, 11-bit, 500 kbps (protocol 6, confirmed by the
-        // obd_logger capture). Fixed protocol skips the ~6 s auto-search.
-        SerialBT.print("ATSP6\r");
-        delay(400);
-        while(SerialBT.available()) SerialBT.read(); // Clear channel cache
-        currentHeader = "";
-
-        isConnected = true;   // set last; loop() notices the change and updates the UI
-        logDebug("SYS_INIT", "Link active. Resuming standard sensor loops.");
+// Probe the PCM with "0100" (supported PIDs 01-20), which every OBD-II ECU answers.
+// Called from loop() every CAN_RETRY_INTERVAL_MS while not connected.
+inline void tryCanConnect() {
+    String resp = canRequest(0x7E0, "0100");
+    if (resp.startsWith("4100")) {
+        logDebug("CAN_CON", "PCM answered 0100 -> " + resp + ". Link active.");
+        missedPcmReplies = 0;
+        isConnected = true;   // loop() notices the change and updates the UI
     } else {
-        logDebug("BT_WARN", "Handshake failed. Continuing in demo mode.");
-        isConnected = false;
+        logDebug("CAN_WARN", "No reply from PCM (7E0). Continuing in demo mode.");
     }
-}
-
-// Background task: keeps retrying the connection while offline, so loop()
-// (touch + drawing) is never blocked by a slow/failed connect.
-inline void btConnectTask(void* param) {
-    for (;;) {
-        if (!isConnected) {
-            btAttempting = true;
-            tryBluetoothConnect();
-            btAttempting = false;
-            lastBtRetry = millis();
-        }
-        vTaskDelay(pdMS_TO_TICKS(BT_RETRY_INTERVAL_MS));
-    }
-}
-
-inline void startBluetoothTask() {
-    xTaskCreatePinnedToCore(btConnectTask, "btConnect", 8192, NULL, 1, NULL, 0);
 }
 
 // Turn a raw 2-byte DTC into its text form, e.g. 0x0470 -> "P0470", 0x4123 -> "C0123"
@@ -120,28 +208,13 @@ inline String decodeDTC(uint16_t raw) {
     return String(buf);
 }
 
-// Send a request that may get a multi-frame CAN reply and return the joined payload.
-// Single frame: one line starting with replyPrefix. Multi-frame: a length line ("00A")
-// then "0:..." "1:..." lines, so read until the ELM '>' prompt and stitch them together.
-// Returns "" if no line starting with replyPrefix came back.
+// Send a request that may get a multi-frame CAN reply and return the joined payload,
+// or "" if the reply doesn't start with replyPrefix.
 inline String queryMultiFrame(const char* header, const char* cmd, const char* replyPrefix) {
-    setHeader(header);
-    String resp = elmCommand(cmd, 1500);
-
-    String payload = "";
-    int lineStart = 0;
-    while (lineStart < (int)resp.length()) {
-        int lineEnd = resp.indexOf('\n', lineStart);
-        if (lineEnd < 0) lineEnd = resp.length();
-        String line = resp.substring(lineStart, lineEnd);
-        lineStart = lineEnd + 1;
-
-        if (line.length() > 2 && line.charAt(1) == ':') payload += line.substring(2);   // "0:4304..."
-        else if (line.startsWith(replyPrefix))           payload += line;                // single frame
-    }
-
+    uint32_t id = headerToId(header);
+    String payload = id ? canRequest(id, cmd, 300) : "NODATA";
     if (!payload.startsWith(replyPrefix)) {
-        logDebug("OBD_WARN", "No valid reply to " + String(cmd) + ". Raw: " + resp);
+        logDebug("OBD_WARN", "No valid reply to " + String(cmd) + ". Raw: " + payload);
         return "";
     }
     return payload;
@@ -182,8 +255,8 @@ inline void checkStoredDTCs() {
 }
 
 // ---- ABS module ------------------------------------------------------------
-// Ford HS-CAN ABS module: requests to 760, replies from 768 (the ELM listens on
-// header + 8 automatically). Typical Ford ABS address, not yet confirmed on this truck.
+// Ford HS-CAN ABS module: requests to 760, replies from 768.
+// Typical Ford ABS address, not yet confirmed on this truck.
 // NOTE: the wheel-speed PIDs and scale below are UNVERIFIED placeholders.
 // Confirm the exact PIDs/scaling for your truck's ABS module (e.g. in FORScan)
 // before trusting these numbers. Cards just show "---" if the module doesn't answer.
@@ -223,6 +296,8 @@ inline void pollWheelRear() { readWheelSpeed(ABS_PID_REAR, valWheelRear); }
 // ---- Engine / chassis values (one function per card) ------------------------
 
 // Transfer Case Status (4x4 Control Module)
+// "418F02" is a leftover non-CAN header, so this always reads NO DATA until the
+// module's real 11-bit address is found (FORScan; it may be on MS-CAN instead).
 inline void pollTCase() {
     String raw4x4 = queryCustomPID("418F02", "2211B2");
     if (raw4x4.startsWith("6211B2") && raw4x4.length() >= 8) {

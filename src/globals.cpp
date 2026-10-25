@@ -3,17 +3,14 @@
 // Hardware Instance Definitions
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite canvas = TFT_eSprite(&tft);
-BluetoothSerial SerialBT;
-ELM327 myELM;
 XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
 
 // State Flags
-volatile bool isConnected = false;
-volatile bool btAttempting = false;
-volatile bool btStackFailed = false;
+bool isConnected = false;
+bool canDriverFailed = false;
 unsigned long lastBusQuery = 0;
 unsigned long lastTouchDebounce = 0;
-unsigned long lastBtRetry = 0;
+unsigned long lastCanRetry = 0;
 int currentPage = 0;
 int menuMetric = -1;
 unsigned long menuShownAt = 0;

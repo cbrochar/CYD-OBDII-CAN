@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "can_sniffer.h"
 
 // ---- Layout --------------------------------------------------------------
 // Screen (rotation 1) is 320x240.
@@ -53,8 +54,8 @@ static_assert(METRIC_COUNT <= METRIC_PAGES * METRICS_PER_PAGE,
               "Metric table has more entries than METRIC_PAGES * METRICS_PER_PAGE");
 static_assert(METRIC_COUNT <= PAGE_ABS * METRICS_PER_PAGE + 3,
               "The ABS page's 4th slot is reserved for the ABS status card");
-static_assert(PAGE_DTC == METRIC_PAGES && TOTAL_PAGES == METRIC_PAGES + 1,
-              "The DTC page must come right after the metric pages");
+static_assert(PAGE_DTC == METRIC_PAGES && PAGE_SNIFF == PAGE_DTC + 1 && TOTAL_PAGES == METRIC_PAGES + 2,
+              "The DTC page must come right after the metric pages, then the sniffer page");
 
 inline void pollVisibleMetrics() {
     if (fullScreenMetric >= 0) {
@@ -75,7 +76,10 @@ inline void updateStatusBar(bool force = false) {
     String text;
     uint16_t bg, fg;
 
-    if (isConnected) {
+    if (canListenOnly) {
+        text = "CAN LISTEN-ONLY - NOTHING SENT";
+        bg = TFT_BLUE;         fg = TFT_WHITE;
+    } else if (isConnected) {
         if (hasDTCWarning) {
             text = "[!] STORED ERROR CODES DETECTED";
             bg = TFT_RED;      fg = TFT_WHITE;
@@ -83,16 +87,13 @@ inline void updateStatusBar(bool force = false) {
             text = "MONITOR ACTIVE - TAP TO SWIPE";
             bg = TFT_DARKGREY; fg = TFT_BLACK;
         }
-    } else if (btStackFailed) {
-        text = "BT STACK FAILED - DEMO DATA";
+    } else if (canDriverFailed) {
+        text = "CAN DRIVER FAILED - DEMO DATA";
         bg = TFT_RED;          fg = TFT_WHITE;
-    } else if (btAttempting) {
-        text = "BT OFFLINE - CONNECTING...";
-        bg = TFT_YELLOW;       fg = TFT_BLACK;
     } else {
-        unsigned long elapsed = millis() - lastBtRetry;
-        unsigned long secs = (elapsed >= BT_RETRY_INTERVAL_MS) ? 0 : (BT_RETRY_INTERVAL_MS - elapsed) / 1000;
-        text = "BT OFFLINE - DEMO DATA - RETRY " + String(secs) + "s";
+        unsigned long elapsed = millis() - lastCanRetry;
+        unsigned long secs = (elapsed >= CAN_RETRY_INTERVAL_MS) ? 0 : (CAN_RETRY_INTERVAL_MS - elapsed) / 1000;
+        text = "NO CAN REPLY - DEMO DATA - RETRY " + String(secs) + "s";
         bg = TFT_YELLOW;       fg = TFT_BLACK;
     }
 
@@ -209,12 +210,60 @@ inline void drawDtcPageToCanvas() {
     }
 }
 
-// Builds one page (2x2 card grid or the DTC list, + page dots). Works the same connected or not.
+// Sniffer page: one row per CAN ID (ID, data bytes, frames per second), bytes that
+// changed in the last SNIFF_HIGHLIGHT_MS in yellow. Tap the list for the next rows;
+// tap the footer (below SNIFF_FOOTER_Y) for the next page.
+const int SNIFF_ROWS     = 11;
+const int SNIFF_ROW_H    = 15;
+const int SNIFF_LIST_Y   = 26;
+const int SNIFF_FOOTER_Y = SNIFF_LIST_Y + SNIFF_ROWS * SNIFF_ROW_H + 2;
+
+inline void drawSnifferPageToCanvas() {
+    canvas.setTextSize(1);
+    canvas.setTextColor(TFT_ORANGE, TFT_BLACK);
+    canvas.drawString("CAN SNIFFER", 6, 4, 2);
+    canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+    canvas.drawRightString(String(sniffIdCount) + " IDs  " + String(sniffBusRate) + " fr/s", 314, 4, 2);
+    canvas.drawFastHLine(4, 22, 312, TFT_DARKGREY);
+
+    if (sniffIdCount == 0) {
+        canvas.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        canvas.drawCentreString("WAITING FOR CAN TRAFFIC...", 160, 80, 2);
+        canvas.drawCentreString("Listen-only: nothing is sent", 160, 104, 2);
+    }
+
+    unsigned long now = millis();
+    char hex[9];
+    for (int r = 0; r < SNIFF_ROWS && sniffScroll + r < sniffIdCount; r++) {
+        const SniffEntry& e = sniffIds[sniffScroll + r];
+        int y = SNIFF_LIST_Y + r * SNIFF_ROW_H;
+        snprintf(hex, sizeof(hex), e.extd ? "%X" : "%03X", e.id);
+        canvas.setTextColor(TFT_CYAN, TFT_BLACK);
+        canvas.drawString(hex, 6, y, 2);
+        for (int i = 0; i < e.dlc; i++) {
+            bool recent = e.changedAt[i] && now - e.changedAt[i] < SNIFF_HIGHLIGHT_MS;
+            snprintf(hex, sizeof(hex), "%02X", e.data[i]);
+            canvas.setTextColor(recent ? TFT_YELLOW : TFT_LIGHTGREY, TFT_BLACK);
+            canvas.drawString(hex, 46 + i * 24, y, 2);
+        }
+        canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+        canvas.drawRightString(String(e.rate) + "/s", 314, y, 2);
+    }
+
+    int listPages = max(1, (sniffIdCount + SNIFF_ROWS - 1) / SNIFF_ROWS);
+    canvas.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    canvas.drawString("LIST " + String(sniffScroll / SNIFF_ROWS + 1) + "/" + String(listPages), 6, PIP_Y - 3, 1);
+    canvas.drawRightString("NEXT PAGE >", 314, PIP_Y - 3, 1);
+}
+
+// Builds one page (2x2 card grid, DTC list or sniffer, + page dots). Works the same connected or not.
 inline void buildPage(int pageNum) {
     canvas.fillSprite(TFT_BLACK);
 
     if (pageNum == PAGE_DTC) {
         drawDtcPageToCanvas();
+    } else if (pageNum == PAGE_SNIFF) {
+        drawSnifferPageToCanvas();
     } else {
         for (int slot = 0; slot < METRICS_PER_PAGE; slot++) {
             int idx = pageNum * METRICS_PER_PAGE + slot;
@@ -333,7 +382,8 @@ inline int metricAtPoint(int cx, int cy) {
 //   Full screen     -> back to the page
 //   Menu showing    -> NEXT PAGE / FULL SCREEN, or tap elsewhere to close it
 //   Tap on a gauge  -> show the menu for that gauge
-//   Tap elsewhere   -> next page (DTC page, ABS status card)
+//   Sniffer list    -> next block of CAN IDs
+//   Tap elsewhere   -> next page (DTC page, ABS status card, sniffer footer)
 inline void handleTap(int sx, int sy) {
     int cx = sx, cy = max(0, sy - CANVAS_Y);
 
@@ -349,6 +399,9 @@ inline void handleTap(int sx, int sy) {
             logDebug("UI_NAV", "Full screen: " + String(metrics[idx].label));
             fullScreenMetric = idx;
         }
+    } else if (currentPage == PAGE_SNIFF && cy < SNIFF_FOOTER_Y) {
+        sniffScroll += SNIFF_ROWS;   // next block of IDs, wrapping to the top
+        if (sniffScroll >= sniffIdCount) sniffScroll = 0;
     } else {
         int idx = metricAtPoint(cx, cy);
         if (idx < 0) {

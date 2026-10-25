@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include "config.h"
 #include "obd_engine.h"
+#include "can_sniffer.h"
 #include "display_ui.h"
 
 void setup() {
@@ -33,16 +34,24 @@ void setup() {
     // Start in demo mode: default values on screen, touch + paging fully usable
     loadDemoValues();
 
-    logDebug("BT_CON", "Initializing Bluetooth Classic stack as Master mode...");
-    if (!SerialBT.begin("CYD_Diag_Dash", true)) {
-        // No longer fatal: keep running in demo mode so the UI can still be tested
-        logDebug("BT_FATAL", "Bluetooth Classic stack initialization failed! Staying in demo mode.");
-        btStackFailed = true;
-    } else {
-        delay(200); // Allow time for the Bluetooth stack to stabilize
-        SerialBT.setPin("1234");
-        btAttempting = true;       // so the status bar says "CONNECTING..." from the start
-        startBluetoothTask();      // connect attempts + retries happen in the background
+    // The "sniffer" build (pio run -e sniffer) starts on the listen-only page, so the
+    // first connection to a bus sends nothing at all
+#ifdef CAN_BOOT_LISTEN_ONLY
+    const bool listenOnly = true;
+    currentPage = PAGE_SNIFF;
+#else
+    const bool listenOnly = false;
+#endif
+
+    logDebug("CAN_INIT", "Starting TWAI driver at 500 kbps (TX " + String(CAN_TX_PIN) + ", RX " + String(CAN_RX_PIN) + ")" +
+                         (listenOnly ? " in LISTEN-ONLY mode..." : "..."));
+    if (!canBegin(listenOnly)) {
+        // Not fatal: keep running in demo mode so the UI can still be tested
+        logDebug("CAN_FATAL", "TWAI driver failed to start! Staying in demo mode.");
+        canDriverFailed = true;
+    } else if (!listenOnly) {
+        tryCanConnect();   // a probe takes ~100 ms, so the first one runs right away
+        lastCanRetry = millis();
     }
 
     updateStatusBar(true);
@@ -53,11 +62,26 @@ void loop() {
     static bool wasConnected = false;
     static unsigned long lastBarCheck = 0;
 
-    // 0. Detect a dropped link (the background task will start reconnecting)
-    if (isConnected && !SerialBT.connected()) {
-        logDebug("BT_WARN", "Bluetooth link lost. Falling back to demo mode.");
+    // 0. The sniffer page puts the controller in listen-only mode; any other page polls.
+    //    While sniffing, every waiting frame is read on each pass so the queue can't fill.
+    bool wantListenOnly = currentPage == PAGE_SNIFF;
+    if (wantListenOnly != canListenOnly && !canDriverFailed) {
+        canSetListenOnly(wantListenOnly);
+        if (wantListenOnly) sniffReset();
+        updateStatusBar(true);
+    }
+    if (canListenOnly) sniffPoll();
+
+    //    Connect / detect a dropped link: the PCM stops answering when the key is
+    //    turned off, so several missed replies in a row means it's gone
+    if (isConnected && missedPcmReplies >= CAN_MAX_MISSED_REPLIES) {
+        logDebug("CAN_WARN", "PCM stopped answering. Falling back to demo mode.");
         isConnected = false;
-        lastBtRetry = millis();
+        lastCanRetry = millis();
+    }
+    if (!isConnected && !canDriverFailed && !canListenOnly && millis() - lastCanRetry > CAN_RETRY_INTERVAL_MS) {
+        tryCanConnect();
+        lastCanRetry = millis();
     }
 
     // 1. React to connect / disconnect transitions
@@ -94,7 +118,7 @@ void loop() {
     // 3. Refresh data + page every POLL_INTERVAL_MS (live data only when connected)
     if (millis() - lastBusQuery > POLL_INTERVAL_MS) {
         lastBusQuery = millis();
-        if (isConnected) updateVehicleData();
+        if (isConnected && !canListenOnly) updateVehicleData();
         drawCurrentScreen();
     }
 
