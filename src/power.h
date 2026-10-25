@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "can_logger.h"
+#include "brightness.h"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
 
@@ -15,15 +16,13 @@
 // "Activity" is the PCM answering, frames arriving on the sniffer page, or a tap.
 // Deep sleep restarts the firmware on wake-up, like a power-on.
 
-const int TFT_BACKLIGHT_PIN = 21;
-
 static unsigned long lastActivityMs = 0;
 static bool screenIsOff = false;
 
 inline void setScreenOn(bool on) {
     if (on == !screenIsOff) return;
     screenIsOff = !on;
-    digitalWrite(TFT_BACKLIGHT_PIN, on ? HIGH : LOW);
+    backlightSetOn(on);
     logDebug("POWER", on ? "Screen on" : "No activity, screen off (tap to wake)");
 }
 
@@ -55,6 +54,8 @@ inline void enterDeepSleep() {
     twai_driver_uninstall();
 
     tft.writecommand(0x10);                       // ILI9341 sleep in: panel draws almost nothing
+    ledcDetachPin(TFT_BACKLIGHT_PIN);             // PWM stops in deep sleep; hold the pin low instead
+    pinMode(TFT_BACKLIGHT_PIN, OUTPUT);
     digitalWrite(TFT_BACKLIGHT_PIN, LOW);
     gpio_hold_en((gpio_num_t)TFT_BACKLIGHT_PIN);  // keep the backlight off while asleep
     gpio_deep_sleep_hold_en();

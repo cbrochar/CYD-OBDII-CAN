@@ -60,6 +60,17 @@ const unsigned long CAN_REPLY_TIMEOUT_MS  = 100;
 // This many PCM requests in a row without a reply counts as the link being lost
 const int CAN_MAX_MISSED_REPLIES = 5;
 
+// Auto brightness (brightness.h): the light sensor sets the backlight between
+// BRIGHTNESS_MIN_PCT (reading at LDR_DARK_RAW or darker) and 100% (at LDR_BRIGHT_RAW).
+// To recalibrate, set LIGHT_LOG_INTERVAL_MS and read the LIGHT lines in the serial log.
+#define LDR_PIN       34
+const bool AUTO_BRIGHTNESS                = true;    // false = always full brightness
+const int  BRIGHTNESS_MIN_PCT             = 10;
+const int  LDR_DARK_RAW                   = 2000;    // the CYD sensor reads HIGHER in the dark: ~2600 fully dark, 100-350 shaded
+const int  LDR_BRIGHT_RAW                 = 0;       // and 0 in normal room light or brighter
+const unsigned long LIGHT_SMOOTHING_MS    = 3000;
+const unsigned long LIGHT_LOG_INTERVAL_MS = 0;       // e.g. 500 to log readings for calibration
+
 // Battery protection (power.h): with no activity (PCM answering, sniffer traffic or a
 // tap) the backlight goes off, then the board deep-sleeps until CAN traffic or a tap.
 // 0 turns that step off.

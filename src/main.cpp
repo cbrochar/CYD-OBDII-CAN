@@ -12,10 +12,8 @@ void setup() {
     logDebug("SYS_INIT", "Powering up ESP32 core subsystems...");
     powerBegin();
 
-    pinMode(TFT_BACKLIGHT_PIN, OUTPUT);
-    digitalWrite(TFT_BACKLIGHT_PIN, HIGH);
-
     tft.init();
+    backlightBegin();   // PWM backlight, level set from the light sensor
     tft.invertDisplay(true);
     tft.setRotation(1);
     drawSplashScreen();
@@ -145,4 +143,7 @@ void loop() {
 
     // 5. Battery protection: screen off, then deep sleep, when nothing is happening
     powerTick();
+
+    // 6. Auto brightness from the light sensor
+    backlightTick();
 }

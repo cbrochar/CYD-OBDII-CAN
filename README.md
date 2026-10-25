@@ -38,6 +38,8 @@ When the truck isn't answering it runs on demo values, so you can test the scree
   red warning when engine trouble codes are stored.
 - **Demo mode**: runs on sample values whenever the PCM isn't answering (key off, not plugged
   in), and probes it again every 5 seconds.
+- **Auto brightness**: the CYD's light sensor dims the screen at night and brings it back to full
+  brightness in daylight, smoothly, see [Auto brightness](#auto-brightness).
 - **Fast polling**: only the values on screen are read from the truck. Talking to the bus
   directly takes a few milliseconds per value instead of about 100 ms through an ELM327.
 
@@ -158,6 +160,21 @@ To boot straight onto the sniffer page, so nothing at all is sent until you tap 
 pio run -e sniffer -t upload
 ```
 
+## Auto brightness
+
+The light sensor on the front of the CYD (an LDR on GPIO34) sets the backlight brightness.
+
+- On this board the sensor reads **0 in normal room light or brighter**, rises to 100–350 in
+  shade and to about 2,600 in full darkness (higher = darker).
+- 0 gives 100% brightness; a reading of 2,000 or more gives the 10% night floor. The curve is
+  squared, so dusk and shade only dim the screen a little and it drops off near full darkness.
+- The reading is smoothed over about 3 seconds, so a passing shadow or headlights don't make the
+  screen flicker.
+- Settings are in [`src/config.h`](src/config.h): `AUTO_BRIGHTNESS` (false = always full
+  brightness), `BRIGHTNESS_MIN_PCT` and the two calibration points. To recalibrate for your board,
+  set `LIGHT_LOG_INTERVAL_MS` to 500 and read the `LIGHT` lines in the serial log while you cover
+  and uncover the sensor.
+
 ## Battery protection
 
 The OBD port's power pin is live with the key off, so the display powers itself down when the
@@ -231,6 +248,9 @@ Everything you're likely to change is in [`src/config.h`](src/config.h):
 | `CAN_RETRY_INTERVAL_MS` | 5000 | How often the PCM is probed while it isn't answering |
 | `CAN_REPLY_TIMEOUT_MS` | 100 | How long to wait for a module's reply |
 | `CAN_MAX_MISSED_REPLIES` | 5 | PCM requests in a row without a reply before falling back to demo |
+| `AUTO_BRIGHTNESS` | true | Set the backlight from the light sensor (false = always full brightness) |
+| `BRIGHTNESS_MIN_PCT` | 10 | Night-time backlight level |
+| `LDR_DARK_RAW` / `LDR_BRIGHT_RAW` | 2000 / 0 | Sensor readings for the night floor / full brightness |
 | `SCREEN_OFF_AFTER_MS` | 120000 | Backlight off after this long with no activity (0 = never) |
 | `SLEEP_AFTER_MS` | 300000 | Deep sleep after this long with no activity (0 = never) |
 | `MAX_SNIFF_IDS` | 64 | Most CAN IDs the sniffer keeps track of |
@@ -260,6 +280,7 @@ CYD-OBDII-CAN/
 │   ├── can_logger.h     SD card recording (candump .LOG + MARK notes .TXT)
 │   ├── can_simulator.h  Simulated truck for the bench self-test build
 │   ├── power.h          Battery protection: screen off, deep sleep, wake on CAN or tap
+│   ├── brightness.h     Auto brightness: light sensor -> backlight PWM
 │   └── display_ui.h     Gauge table, cards, full-screen gauge, tap menu, status bar, pages
 ├── hardware/
 │   └── case/            3D-printable case (STL files, credits, build notes)
