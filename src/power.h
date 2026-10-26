@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "settings.h"
 #include "can_logger.h"
 #include "brightness.h"
 #include "driver/rtc_io.h"
@@ -45,8 +46,9 @@ inline void powerBegin() {
 }
 
 inline void enterDeepSleep() {
-    logDebug("POWER", "No activity for " + String(SLEEP_AFTER_MS / 1000) + " s, entering deep sleep "
+    logDebug("POWER", "No activity for " + String(settings.sleepMin) + " min, entering deep sleep "
                       "(wakes on CAN traffic or a tap)");
+    if (settingsDirty) settingsSave();
     logStop();   // close an SD capture cleanly
     Serial.flush();
 
@@ -75,8 +77,9 @@ inline void enterDeepSleep() {
 // Call on every loop() pass, after the CAN and touch handling
 inline void powerTick() {
     unsigned long idle = millis() - lastActivityMs;
-    if (SCREEN_OFF_AFTER_MS > 0 && !screenIsOff && idle > SCREEN_OFF_AFTER_MS) setScreenOn(false);
-    if (SLEEP_AFTER_MS > 0 && idle > SLEEP_AFTER_MS) enterDeepSleep();
+    unsigned long screenOffMs = settings.screenOffMin * 60000UL, sleepMs = settings.sleepMin * 60000UL;
+    if (screenOffMs > 0 && !screenIsOff && idle > screenOffMs) setScreenOn(false);
+    if (sleepMs > 0 && idle > sleepMs) enterDeepSleep();
 }
 
 #endif

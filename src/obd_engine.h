@@ -277,8 +277,11 @@ inline void checkStoredDTCs() {
 }
 
 // ---- ABS module ------------------------------------------------------------
-// Ford HS-CAN ABS module: requests to 760, replies from 768.
-// Typical Ford ABS address, not yet confirmed on this truck.
+// ABS module: requests to 760, replies from 768 (a typical Ford HS-CAN address).
+// Probably WRONG for this truck: Ford's 2005 Excursion workshop manual (section 418-00,
+// as quoted on a forum) puts the ABS module on the K-line (ISO 9141, OBD pin 7), not CAN,
+// so nothing answers at 760. Reading it needs K-line access; see the README roadmap.
+// Its Ford PIDs are LF_WSPD, RF_WSPD, R_WSPD (0-255 km/h) and CCNTABS (code count).
 // NOTE: the wheel-speed PIDs and scale below are UNVERIFIED placeholders.
 // Confirm the exact PIDs/scaling for your truck's ABS module (e.g. in FORScan)
 // before trusting these numbers. Cards just show "---" if the module doesn't answer.
@@ -318,8 +321,11 @@ inline void pollWheelRear() { readWheelSpeed(ABS_PID_REAR, valWheelRear); }
 // ---- Engine / chassis values (one function per card) ------------------------
 
 // Transfer Case Status (4x4 Control Module)
-// "418F02" is a leftover non-CAN header, so this always reads NO DATA until the
-// module's real 11-bit address is found (FORScan; it may be on MS-CAN instead).
+// "418F02" is a leftover non-CAN header, so this always reads NO DATA. Per the workshop
+// manual the 4WD control module is on the K-line (ISO 9141, OBD pin 7), not CAN. Its PIDs:
+// 4WD_SW = selector position (2WD / 4WD / 4WD LOW), and PLATE_A..D = shift-motor encoder
+// contacts giving the actual position (2H: open/open/closed/open, 4H: closed/open/closed/
+// open, 4L: closed/closed/open/open). Reading them needs K-line access (README roadmap).
 inline void pollTCase() {
     String raw4x4 = queryCustomPID("418F02", "2211B2");
     if (raw4x4.startsWith("6211B2") && raw4x4.length() >= 8) {

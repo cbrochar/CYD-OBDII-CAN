@@ -5,11 +5,13 @@
 #include "can_sniffer.h"
 #include "display_ui.h"
 #include "power.h"
+#include "wifi_portal.h"
 
 void setup() {
     Serial.begin(115200);
     delay(500);
     logDebug("SYS_INIT", "Powering up ESP32 core subsystems...");
+    settingsLoad();   // before anything uses brightness, alarm or power settings
     powerBegin();
 
     tft.init();
@@ -146,4 +148,10 @@ void loop() {
 
     // 6. Auto brightness from the light sensor
     backlightTick();
+
+    // 7. Save Settings page changes to flash
+    settingsTick();
+
+    // 8. Phone hotspot (Settings page, WIFI)
+    wifiTick();
 }

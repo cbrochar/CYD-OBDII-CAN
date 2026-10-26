@@ -26,14 +26,16 @@ When the truck isn't answering it runs on demo values, so you can test the scree
 
 ## Features
 
-- **5 pages**, tap to move between them (page dots at the bottom show where you are)
+- **6 pages**, tap to move between them (page dots at the bottom show where you are)
   1. Transfer case · Turbo boost · Vehicle speed · Transmission temp
   2. FICM main power · Coolant temp · System volts · Engine RPM
   3. ABS: Left-front wheel speed · Right-front wheel speed · Rear axle speed · ABS status (warning triangle when the ABS module has stored codes)
   4. Engine trouble codes (up to 15, e.g. `P0470`): stored codes in red, then pending codes in
      yellow (detected once but not confirmed yet, so they show up before the check-engine light);
-     green when clear
-  5. **CAN sniffer** (listen-only) with **SD card recording**, see [Listen-only sniffer](#listen-only-sniffer)
+     green when clear. **Tap a code** to see what it means.
+  5. **Settings**: brightness, units, alarm limits, power and WiFi, saved in flash, see
+     [Settings page](#settings-page)
+  6. **CAN sniffer** (listen-only) with **SD card recording**, see [Listen-only sniffer](#listen-only-sniffer)
 - **Tap menu**: tap any gauge to get **NEXT PAGE** and **FULL SCREEN** buttons.
   Full screen shows that one gauge as large as it fits; tap again to go back.
 - **Gauge alarms**: a gauge that goes out of range (low FICM voltage, hot transmission or
@@ -43,6 +45,9 @@ When the truck isn't answering it runs on demo values, so you can test the scree
   a red warning when engine trouble codes are stored and a yellow one for pending codes.
 - **Demo mode**: runs on sample values whenever the PCM isn't answering (key off, not plugged
   in), and probes it again every 5 seconds.
+- **Phone access over WiFi**: switch on the CYD's own hotspot to see the live gauges and codes on
+  your phone, download SD recordings and update the firmware without a cable, see
+  [Phone access (WiFi)](#phone-access-wifi).
 - **Auto brightness**: the CYD's light sensor dims the screen at night and brings it back to full
   brightness in daylight, smoothly, see [Auto brightness](#auto-brightness).
 - **Fast polling**: only the values on screen are read from the truck. Talking to the bus
@@ -98,6 +103,34 @@ These were confirmed on the truck with a PC and [`tools/obd_logger.py`](tools/) 
 - Ford-specific FICM PID `2209D0` answers; the raw value is volts × 256
   (e.g. `0x2F80` → 47.5 V)
 
+### From Ford's workshop manual (not yet confirmed on the truck)
+
+A forum member checked the 2005 Excursion Workshop Manual, section 418-00 (Module
+Communications Network):
+
+- The **ABS module** and the **4WD control module** (Electronic Shift-on-the-Fly) talk over
+  **ISO 9141, the K-line on OBD pin 7**, not HS-CAN or MS-CAN. That's why nothing answers at the
+  CAN addresses tried so far, and why the CAN sniffer won't find wheel speeds or the transfer
+  case. Reading them needs K-line access (see [Roadmap](#roadmap)). The PC logger's `--kline`
+  probe finds which K-line addresses answer.
+- **4WD module PIDs** (Ford names, numeric IDs not known yet): `4WD_SW` = selector position
+  (`2WD` / `4WD` / `4WD LOW`, the *requested* position), `PLATE_A`–`PLATE_D` = shift-motor
+  encoder contacts (the *actual* position), `VSS2` = vehicle speed input. Ford's Pinpoint Test C32:
+
+  | Contact | 2H | 4H | 4L |
+  |---|---|---|---|
+  | PLATE_A | open | closed | closed |
+  | PLATE_B | open | open | closed |
+  | PLATE_C | closed | closed | open |
+  | PLATE_D | open | open | open |
+
+  Comparing `4WD_SW` with the plates also shows when a shift is still in progress.
+- **ABS module PIDs** (from older Excursion documentation, may differ for 2005): `LF_WSPD`,
+  `RF_WSPD`, `R_WSPD` (wheel speeds, 0–255 km/h; one rear-axle sensor), `CCNTABS` (number of
+  stored ABS codes), `ABSLAMP`, `BRKLAMP`, `BOO_ABS` (brake pedal switch), `4WDABS`, inlet/outlet
+  valve states and `PWR_RLY`. Ford ABS codes include `C1155` (LF wheel speed sensor), `C1145` (RF)
+  and `C1230` (rear axle).
+
 ## Where each value comes from
 
 | Gauge | Module / header | Request | Formula | Status |
@@ -111,9 +144,9 @@ These were confirmed on the truck with a PC and [`tools/obd_logger.py`](tools/) 
 | Trans temp | PCM `7E0` | `221E1C` | raw / 8 °F | ⚠️ Not yet confirmed |
 | Engine trouble codes | PCM `7E0` | `03` | CAN Mode 03, multi-frame aware | ⚠️ Not yet confirmed |
 | Pending trouble codes | PCM `7E0` | `07` | CAN Mode 07, same format as Mode 03 | ⚠️ Not yet confirmed |
-| Transfer case | `418F02` | `2211B2` | 1 = 2H, 2 = 4H, 4 = 4L | ❌ Returns NO DATA; real module address needed |
-| Wheel speeds (LF/RF/rear) | ABS `760` | placeholders | placeholder scale | ❌ Placeholders; get real PIDs from FORScan |
-| ABS trouble codes | ABS `760` | `1800FF00` | KWP service 18 count | ⚠️ Not yet confirmed |
+| Transfer case | 4WD module, **K-line** | `4WD_SW`, `PLATE_A`–`D` | see the table above | ❌ Not on CAN: needs K-line access (code still tries `418F02`, which returns NO DATA) |
+| Wheel speeds (LF/RF/rear) | ABS module, **K-line** | `LF_WSPD`, `RF_WSPD`, `R_WSPD` | 0–255 km/h | ❌ Not on CAN: needs K-line access (code still tries placeholders at `760`) |
+| ABS trouble codes | ABS module, **K-line** | `CCNTABS` count | | ❌ Not on CAN: needs K-line access |
 
 Turbo boost uses standard PID `0B`, which tops out at 255 kPa, so the gauge maxes out at about 22 psi of boost.
 
@@ -143,10 +176,66 @@ CYD. The status bar shows `NO CAN REPLY - DEMO DATA - RETRY Ns` until the PCM an
 `MONITOR ACTIVE - TAP TO SWIPE`. With the key off the PCM goes quiet and the display falls back
 to demo data after 5 missed replies.
 
+## Trouble code descriptions
+
+On the codes page, **tap a code** to open a box with what it means, e.g. `P0470` → "Exhaust back
+pressure (EBP) sensor circuit". Pending codes also explain that they've been seen once but aren't
+confirmed yet. Tap anywhere to close the box.
+
+The list in [`src/dtc_descriptions.h`](src/dtc_descriptions.h) covers the codes common on the
+6.0L Powerstroke (EBP, ICP, FICM, EGR, glow plugs, turbo, injectors by cylinder) plus generic
+OBD-II codes and the Ford ABS wheel-speed codes. A code that isn't listed says whether it's a
+generic or a Ford-specific code. To add one, add a row: `{"P0123", "What it means"},`.
+
+## Settings page
+
+The settings page (after the codes page) changes these without editing code. Changes are saved
+in the ESP32's flash 2 seconds after the last tap, so they survive power-off and firmware uploads.
+
+| Section | Setting | Default |
+|---|---|---|
+| DISPLAY | Auto brightness on/off, night brightness (5–100%), temperature °F/°C, speed MPH/KM/H | on, 10%, °F, MPH |
+| ALARMS | Gauge alarms on/off, FICM low, trans temp high, coolant high | on, 45.0 V, 220 °F, 230 °F |
+| VOLTAGE | System volts low / high alarm | 11.8 V / 15.0 V |
+| POWER | Screen off after (never, 1–30 min), sleep after (never, 5–60 min) | 2 min, 5 min |
+| WIFI | Phone hotspot on/off, plus the network name, password and address | off |
+
+- Each row has one button (tap to switch) or **−** / **+** buttons.
+- **MORE** goes to the next section, **NEXT >** to the next page.
+- **DEFAULTS** puts everything back to the defaults: tap it, it turns red (`SURE?`), then tap
+  again within 3 seconds.
+- The defaults are the values in [`src/config.h`](src/config.h). Temperatures are kept in °F
+  and speeds in MPH internally; the units settings only change what's shown, so alarm limits
+  stay the same whichever units you pick.
+
+## Phone access (WiFi)
+
+The CYD can run its own WiFi hotspot, so a phone can see the dash without any app:
+
+1. On the CYD: Settings → **MORE** to **WIFI** → **Phone hotspot ON**.
+2. On the phone, join the WiFi network **`CYD-OBDII`**, password **`powerstroke`** (set
+   `WIFI_AP_SSID` / `WIFI_AP_PASSWORD` in [`src/config.h`](src/config.h)). If the phone warns
+   that the network has no internet, choose to stay connected.
+3. Open **http://192.168.4.1** in the phone's browser.
+
+| Tab | What it does |
+|---|---|
+| **Live** | All gauges, refreshed every second, in the units chosen on the CYD; alarms in red; stored and pending codes with their descriptions |
+| **Logs** | The SD card recordings (`.LOG` and `.TXT`): download to the phone or delete. The file being recorded is shown but can't be downloaded until you STOP |
+| **Update** | Upload a new firmware `.bin` (from `.pio/build/esp32dev/firmware.bin` after a PlatformIO build). The CYD restarts with it when the upload is checked |
+
+- The phone only sees what the display already reads: no extra requests go to the truck.
+- The hotspot is **off by default** because it draws about 100 mA; the setting is remembered.
+  While a phone is using the page the display stays awake.
+- Anyone in range who knows the password can use the page, including the firmware update. Change
+  the password in `config.h` if that matters to you.
+
 ## Listen-only sniffer
 
-The last page is a CAN sniffer for finding values the truck broadcasts on its own, such as
-wheel speeds or the transfer case position, which are still unknown (see [Roadmap](#roadmap)).
+The last page is a CAN sniffer for finding values the truck broadcasts on its own on HS-CAN.
+(Per Ford's workshop manual the ABS and 4WD modules are on the K-line, not CAN, so wheel speeds
+and the transfer case position won't show up here; see
+[From Ford's workshop manual](#from-fords-workshop-manual-not-yet-confirmed-on-the-truck).)
 
 - While the page is shown, the controller is in **listen-only mode**: it sends nothing, not even
   the ACK bit, so it can't disturb the bus. The status bar turns blue:
@@ -166,6 +255,29 @@ To boot straight onto the sniffer page, so nothing at all is sent until you tap 
 pio run -e sniffer -t upload
 ```
 
+### Recording to the SD card
+
+Put a FAT32 microSD card in the CYD's slot (it can go in while the display is running), open the
+sniffer page and tap **REC**. The header turns red and shows the file name and how many frames
+have been written, e.g. `REC CAN0003 12345`. Tap **STOP** when done; leaving the page or the
+display going to sleep also stops it.
+
+- Each recording is a new pair of files: `CAN0001.LOG`, `CAN0002.LOG`, ...
+- **`CANnnnn.LOG`** has every frame in `candump` log format, one per line:
+  `(0000123.456789) can0 4B0#1F861F8B1F901F95` (time in seconds since the CYD started, ID, data).
+  Open it in [SavvyCAN](https://www.savvycan.com/) (File → Load Log File, type *candump*), or with
+  python-can / cantools.
+- **`CANnnnn.TXT`** holds the notes: the start time and a line for each **MARK** tap, e.g.
+  `(0000051.516143) MARK 1`. Tap MARK the moment you do something (shift the transfer case,
+  brake, turn the wheel), then look at the log around that time for the bytes that changed.
+- The log is written to the card every 2 seconds, so unplugging the display loses at most the
+  last 2 seconds.
+- If the header shows `!` and a number, that many frames were dropped because the receive queue
+  filled up (the card was too slow for a moment).
+- `NO SD` on the button means no card was found; insert one and tap it again.
+- To find out which bytes changed at a MARK or between two recordings, use
+  [`tools/can_compare.py`](tools/README.md#can_comparepy) on the PC.
+
 ## Gauge alarms
 
 A gauge whose value goes outside its limits gets a red frame and flashes solid red, and the
@@ -174,20 +286,22 @@ showing. Gauges with limits are also read in the background every 2 seconds whil
 another page, so an alarm is never missed. Each alarm and its clearing are logged to serial
 (`ALARM` lines). Alarms only use live readings, never demo data.
 
-| Gauge | Alarm when | Setting in [`src/config.h`](src/config.h) |
+| Gauge | Alarm when (default) | Default in [`src/config.h`](src/config.h) |
 |---|---|---|
 | FICM main power | below 45.0 V | `ALARM_FICM_LOW_V` |
 | Trans temp | above 220 °F | `ALARM_TFT_HIGH_F` |
 | Coolant temp | above 230 °F | `ALARM_ECT_HIGH_F` |
 | System volts | below 11.8 V or above 15.0 V | `ALARM_VOLTS_LOW_V`, `ALARM_VOLTS_HIGH_V` |
 
-To change a limit, edit its value in `config.h` and upload again. To add a limit to another gauge,
-or remove one, edit the last two columns (low limit, high limit) of its row in the `metrics[]`
-table in [`src/display_ui.h`](src/display_ui.h); `NO_ALARM` means no limit. For example, to warn
-above 3,200 RPM:
+Change the limits, or switch alarms off, on the [Settings page](#settings-page) (ALARMS and
+VOLTAGE); `config.h` only holds the defaults. To add a limit to another gauge, or remove one, edit
+the last two columns (low limit, high limit) of its row in the `metrics[]` table in
+[`src/display_ui.h`](src/display_ui.h); they point at a limit value, and `NO_ALARM` means no limit.
+For example, to warn above 3,200 RPM:
 
 ```cpp
-{"ENGINE RPM",     &valRPM,    "",    TFT_WHITE,   pollRPM,    NO_ALARM, 3200},
+static const float RPM_HIGH = 3200;   // above the metrics[] table
+{"ENGINE RPM",     &valRPM,    "",    TFT_WHITE,   pollRPM,    NO_ALARM, &RPM_HIGH},
 ```
 
 `ALARM_CHECK_INTERVAL_MS` (2000) sets how often off-screen gauges are checked, and
@@ -203,24 +317,25 @@ The light sensor on the front of the CYD (an LDR on GPIO34) sets the backlight b
   squared, so dusk and shade only dim the screen a little and it drops off near full darkness.
 - The reading is smoothed over about 3 seconds, so a passing shadow or headlights don't make the
   screen flicker.
+
 ### Changing the brightness levels
 
-All the settings are in the "Auto brightness" block of [`src/config.h`](src/config.h). After
+**Auto brightness on/off** and the **night brightness** are on the [Settings page](#settings-page)
+(DISPLAY). The rest are in the "Auto brightness" block of [`src/config.h`](src/config.h); after
 changing one, upload again (`pio run -t upload`, or `-e sniffer` / `-e selftest` for those builds).
 
 | Setting | Default | What it does |
 |---|---|---|
-| `AUTO_BRIGHTNESS` | `true` | `false` turns auto brightness off: the screen is always at 100% |
-| `BRIGHTNESS_MIN_PCT` | `10` | Brightness in full darkness, in % (1–100) |
-| `LDR_DARK_RAW` | `2000` | Sensor reading at which the screen reaches `BRIGHTNESS_MIN_PCT` |
+| `AUTO_BRIGHTNESS` | `true` | Default for the Settings page switch (`false` = always 100%) |
+| `BRIGHTNESS_MIN_PCT` | `10` | Default night brightness, in % |
+| `LDR_DARK_RAW` | `2000` | Sensor reading at which the screen reaches the night brightness |
 | `LDR_BRIGHT_RAW` | `0` | Sensor reading at which the screen is at 100% |
 | `LIGHT_SMOOTHING_MS` | `3000` | How quickly the brightness follows the light, in ms (higher = slower and steadier) |
 | `LIGHT_LOG_INTERVAL_MS` | `0` | How often to log sensor readings, in ms (`0` = off; use `500` for calibration) |
 
 Common adjustments:
 
-- **Too dim at night / too bright at night:** raise / lower `BRIGHTNESS_MIN_PCT`, e.g. `20` or
-  `5`.
+- **Too dim at night / too bright at night:** Settings page → DISPLAY → Night brightness.
 - **Dims too early (at dusk or in shade):** raise `LDR_DARK_RAW`, e.g. `2400`; the screen then
   only dims in deeper darkness.
 - **Doesn't dim enough at night:** lower `LDR_DARK_RAW`, e.g. `1000`, so a less dark cab already
@@ -257,35 +372,12 @@ truck goes quiet:
 
 "Activity" means the PCM answering requests, frames arriving on the sniffer page, or a tap. On
 the bench with no truck, the display sleeps after 5 minutes too; tap to wake it. Both times can be
-changed or turned off in [`src/config.h`](src/config.h).
+changed or turned off on the [Settings page](#settings-page) (POWER).
 
 Deep sleep stops the ESP32 and the screen, but the rest of the CYD board (voltage regulator,
 USB-serial chip, power LED), the transceiver and a 12 V → 5 V converter still draw a few mA. Measure
 it before leaving the display wired to always-on power. For zero drain, power it from an
 ignition-switched fuse instead.
-
-### Recording to the SD card
-
-Put a FAT32 microSD card in the CYD's slot (it can go in while the display is running), open the
-sniffer page and tap **REC**. The header turns red and shows the file name and how many frames
-have been written, e.g. `REC CAN0003 12345`. Tap **STOP** when done; leaving the page or the
-display going to sleep also stops it.
-
-- Each recording is a new pair of files: `CAN0001.LOG`, `CAN0002.LOG`, ...
-- **`CANnnnn.LOG`** has every frame in `candump` log format, one per line:
-  `(0000123.456789) can0 4B0#1F861F8B1F901F95` (time in seconds since the CYD started, ID, data).
-  Open it in [SavvyCAN](https://www.savvycan.com/) (File → Load Log File, type *candump*), or with
-  python-can / cantools.
-- **`CANnnnn.TXT`** holds the notes: the start time and a line for each **MARK** tap, e.g.
-  `(0000051.516143) MARK 1`. Tap MARK the moment you do something (shift the transfer case,
-  brake, turn the wheel), then look at the log around that time for the bytes that changed.
-- The log is written to the card every 2 seconds, so unplugging the display loses at most the
-  last 2 seconds.
-- If the header shows `!` and a number, that many frames were dropped because the receive queue
-  filled up (the card was too slow for a moment).
-- `NO SD` on the button means no card was found; insert one and tap it again.
-- To find out which bytes changed at a MARK or between two recordings, use
-  [`tools/can_compare.py`](tools/README.md#can_comparepy) on the PC.
 
 ## Bench self-test (no transceiver)
 
@@ -310,7 +402,9 @@ pio run -e selftest -t upload
 
 ## Configuration
 
-Everything you're likely to change is in [`src/config.h`](src/config.h):
+Brightness, units, alarm limits, the power timers and WiFi are on the
+[Settings page](#settings-page). Everything else is in [`src/config.h`](src/config.h) (the
+values marked "default" are what the Settings page starts with and goes back to):
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -320,12 +414,13 @@ Everything you're likely to change is in [`src/config.h`](src/config.h):
 | `CAN_RETRY_INTERVAL_MS` | 5000 | How often the PCM is probed while it isn't answering |
 | `CAN_REPLY_TIMEOUT_MS` | 100 | How long to wait for a module's reply |
 | `CAN_MAX_MISSED_REPLIES` | 5 | PCM requests in a row without a reply before falling back to demo |
-| `ALARM_*` | see [Gauge alarms](#gauge-alarms) | Alarm limits for FICM, trans temp, coolant and system volts |
-| `AUTO_BRIGHTNESS` | true | Set the backlight from the light sensor (false = always full brightness) |
-| `BRIGHTNESS_MIN_PCT` | 10 | Night-time backlight level |
+| `ALARM_*` | see [Gauge alarms](#gauge-alarms) | Default alarm limits for FICM, trans temp, coolant and system volts |
+| `AUTO_BRIGHTNESS` | true | Default: set the backlight from the light sensor |
+| `BRIGHTNESS_MIN_PCT` | 10 | Default night-time backlight level |
 | `LDR_DARK_RAW` / `LDR_BRIGHT_RAW` | 2000 / 0 | Sensor readings for the night floor / full brightness |
-| `SCREEN_OFF_AFTER_MS` | 120000 | Backlight off after this long with no activity (0 = never) |
-| `SLEEP_AFTER_MS` | 300000 | Deep sleep after this long with no activity (0 = never) |
+| `SCREEN_OFF_AFTER_MS` | 120000 | Default: backlight off after this long with no activity |
+| `SLEEP_AFTER_MS` | 300000 | Default: deep sleep after this long with no activity |
+| `WIFI_AP_SSID` / `WIFI_AP_PASSWORD` | CYD-OBDII / powerstroke | The phone hotspot's network name and password |
 | `MAX_SNIFF_IDS` | 64 | Most CAN IDs the sniffer keeps track of |
 | `SNIFF_LOG_INTERVAL_MS` | 5000 | How often the sniffer logs its ID list to serial |
 | `SNIFF_HIGHLIGHT_MS` | 1000 | How long a changed byte stays yellow on the sniffer page |
@@ -354,6 +449,9 @@ CYD-OBDII-CAN/
 │   ├── can_simulator.h  Simulated truck for the bench self-test build
 │   ├── power.h          Battery protection: screen off, deep sleep, wake on CAN or tap
 │   ├── brightness.h     Auto brightness: light sensor -> backlight PWM
+│   ├── settings.h       Settings page values, saved in flash (NVS)
+│   ├── dtc_descriptions.h  What each trouble code means
+│   ├── wifi_portal.h    Phone hotspot: live page, SD log downloads, firmware update
 │   └── display_ui.h     Gauge table, cards, full-screen gauge, tap menu, status bar, pages
 ├── hardware/
 │   └── case/            3D-printable case (STL files, credits, build notes)
@@ -377,7 +475,9 @@ pip install pyserial
 python tools/obd_logger.py --note "engine idling, warm"
 ```
 
-See [`tools/README.md`](tools/README.md) for the options and how to add Ford-specific PIDs.
+Add `--kline` to also probe the K-line (OBD pin 7) for the ABS and 4WD modules: it lists which
+module addresses answer. See [`tools/README.md`](tools/README.md) for the options and how to add
+Ford-specific PIDs.
 
 ## How it works
 
@@ -409,15 +509,21 @@ See [`tools/README.md`](tools/README.md) for the options and how to add Ford-spe
 
 ## Roadmap
 
-- [ ] Find the transfer case module and its address with FORScan (it may be on MS-CAN)
-- [ ] Real ABS wheel-speed PIDs and scaling
+- [ ] Confirm the ABS and 4WD modules are on the K-line (pin 7): run `obd_logger.py --kline` at the
+      truck, or check FORScan's module list, which shows each module's bus
+- [ ] Find the numeric PIDs for `4WD_SW`, `PLATE_A`–`D`, `LF_WSPD`, `RF_WSPD`, `R_WSPD`
+- [ ] K-line access for the CAN version: an ISO 9141 transceiver (e.g. L9637D) on a free UART.
+      The CYD has very few free pins (IO35 input-only on P3 could be RX; TX would need the RGB LED
+      or speaker pin), so this needs some soldering
 - [ ] Confirm coolant temp, trans temp and DTC reads in a new truck log
 - [x] Hard-wire the CYD to the CAN bus instead of using the Bluetooth ELM327 adapter
       (TWAI + SN65HVD230; code done, **not yet tested in the truck**)
 - [x] Listen-only sniffer page to find broadcast values without sending requests
       (**not yet tested on a bus**)
 - [x] Record sniffer traffic to the SD card with markers (tested on the bench with the self-test build)
-- [ ] Use the sniffer and SD recordings to find wheel-speed and transfer-case broadcasts
+- [ ] Use the sniffer and SD recordings to see what the PCM broadcasts on HS-CAN (the ABS and
+      4WD modules aren't on CAN, so their values won't be there)
+- [ ] Test the WiFi firmware update (the Live and Logs pages are tested from a phone)
 - [ ] Measure the key-off current draw in deep sleep (screen-off and deep-sleep firmware are done
       and tested on the bench; waking on CAN traffic still needs a transceiver to test)
 
