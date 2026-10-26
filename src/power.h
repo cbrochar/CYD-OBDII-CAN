@@ -49,7 +49,8 @@ inline void enterDeepSleep() {
     logDebug("POWER", "No activity for " + String(settings.sleepMin) + " min, entering deep sleep "
                       "(wakes on CAN traffic or a tap)");
     if (settingsDirty) settingsSave();
-    logStop();   // close an SD capture cleanly
+    logStop();        // close an SD capture cleanly
+    driveLogStop();   // and the drive log (drive_log.h, included before this file)
     Serial.flush();
 
     twai_stop();

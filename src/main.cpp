@@ -154,4 +154,7 @@ void loop() {
 
     // 8. Phone hotspot (Settings page, WIFI)
     wifiTick();
+
+    // 9. Drive log (LOG page): reads off-screen gauges and writes a row every second
+    driveLogTick();
 }

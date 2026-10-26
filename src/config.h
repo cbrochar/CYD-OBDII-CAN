@@ -44,11 +44,12 @@ const int CANVAS_STRIPS = 1;
 // Display layout / paging
 const int METRICS_PER_PAGE = 4;   // 2 x 2 grid of cards
 const int METRIC_PAGES     = 3;   // card pages; must match the metric table in display_ui.h (12 metrics)
-const int TOTAL_PAGES      = 6;   // metric pages + DTC list + settings + CAN sniffer
+const int TOTAL_PAGES      = 7;   // metric pages + DTC list + drive log + settings + CAN sniffer
 const int PAGE_ABS         = 2;   // ABS wheel speeds (only polled while this page is shown)
 const int PAGE_DTC         = 3;   // stored trouble code list
-const int PAGE_SETTINGS    = 4;   // settings (saved in flash)
-const int PAGE_SNIFF       = 5;   // listen-only CAN sniffer (nothing is sent while it's shown)
+const int PAGE_LOG         = 4;   // drive log to the SD card (REC / MARK)
+const int PAGE_SETTINGS    = 5;   // settings (saved in flash)
+const int PAGE_SNIFF       = 6;   // listen-only CAN sniffer (nothing is sent while it's shown)
 
 // Stored trouble codes kept for the DTC page (3 columns x 5 rows); pending codes too
 const int MAX_DTCS = 15;
@@ -104,6 +105,11 @@ const unsigned long SNIFF_LOG_INTERVAL_MS = 5000;
 const unsigned long SNIFF_HIGHLIGHT_MS    = 1000;
 // While recording to SD, the log is flushed this often (a power cut loses at most this much)
 const unsigned long LOG_FLUSH_INTERVAL_MS = 2000;
+
+// Drive log (drive_log.h): with REC on the LOG page, the gauges are written to the SD card
+// this often, and the file is saved to the card this often (a power cut loses at most that)
+const unsigned long DRIVE_LOG_INTERVAL_MS = 1000;
+const unsigned long DRIVE_LOG_FLUSH_MS    = 5000;
 
 // Phone hotspot (wifi_portal.h), switched on from the Settings page. Join this network on a
 // phone and open http://192.168.4.1 for live gauges, codes, SD logs and firmware updates.

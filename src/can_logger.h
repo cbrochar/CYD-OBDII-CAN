@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include "config.h"
+#include "sd_card.h"
 
 // ---- SD card capture --------------------------------------------------------------
 // REC on the sniffer page writes every received frame to /CANnnnn.LOG in candump log
@@ -15,7 +16,6 @@
 // Frames are collected in RAM and written in large blocks, and the file is flushed every
 // LOG_FLUSH_INTERVAL_MS, so pulling the power loses at most that much.
 
-static bool     sdReady      = false;
 static bool     logRecording = false;
 static bool     logError     = false;   // card missing, full or removed while recording
 static File     logFile, logNotes;
@@ -25,20 +25,6 @@ static uint32_t logMarks     = 0;
 static char     logBuf[8192];
 static size_t   logBufLen    = 0;
 static unsigned long logLastFlush = 0;
-
-inline bool sdBegin() {
-    if (sdReady) return true;
-    SD.end();
-    SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-    sdReady = SD.begin(SD_CS_PIN, SPI, 20000000);
-    if (sdReady) {
-        logDebug("SD", "Card found: " + String((uint32_t)(SD.cardSize() / (1024 * 1024))) + " MB, " +
-                       String((uint32_t)((SD.totalBytes() - SD.usedBytes()) / (1024 * 1024))) + " MB free");
-    } else {
-        logDebug("SD", "No SD card (or not FAT32 formatted)");
-    }
-    return sdReady;
-}
 
 // Write out the RAM buffer; a short write means the card is gone or full
 inline bool logWriteBuffer() {
