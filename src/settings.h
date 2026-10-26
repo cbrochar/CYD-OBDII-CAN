@@ -30,6 +30,7 @@ struct Settings {
 
 static Settings settings;
 static bool settingsDirty = false;
+static bool wifiStartFailed = false;   // not a setting: the hotspot couldn't start (wifi_portal.h)
 static unsigned long settingsChangedAt = 0;
 
 inline void settingsDefaults() {

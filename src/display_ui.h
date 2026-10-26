@@ -547,7 +547,7 @@ static const SettingRow SETTINGS_POWER[] = {
 };
 
 static const SettingRow SETTINGS_WIFI[] = {
-    {"Phone hotspot",    []() -> String { return String(settings.wifiOn ? "ON" : "OFF"); },
+    {"Phone hotspot",    []() -> String { return String(!settings.wifiOn ? "OFF" : wifiStartFailed ? "FAILED" : "ON"); },
                          [](int) { settings.wifiOn = !settings.wifiOn; }, true},
     {"Network",          []() -> String { return String(WIFI_AP_SSID); }, nullptr, false},
     {"Password",         []() -> String { return String(WIFI_AP_PASSWORD); }, nullptr, false},
@@ -590,7 +590,7 @@ inline void drawSettingsPageToCanvas() {
             canvas.setTextColor(TFT_YELLOW, TFT_BLACK);
             canvas.drawRightString(value, 314, y + 7, 2);
         } else if (row.toggle) {
-            uint32_t c = (value == "OFF") ? TFT_DARKGREY : TFT_GREEN;
+            uint32_t c = (value == "OFF") ? TFT_DARKGREY : (value == "FAILED") ? TFT_RED : TFT_GREEN;
             canvas.drawRoundRect(SET_VALUE_X, y + 2, SET_TOGGLE_W, SET_ROW_H - 4, 5, c);
             canvas.setTextColor(c, TFT_BLACK);
             canvas.drawCentreString(value, SET_VALUE_X + SET_TOGGLE_W / 2, y + 7, 2);
@@ -705,17 +705,36 @@ inline void drawTapMenu(int idx) {
     drawMenuButton(MENU_FULL_X, "FULL", "SCREEN", metrics[idx].color);
 }
 
+// The canvas holds CANVAS_STRIP_H rows. draw() runs once per strip with the drawing
+// shifted up by the strip's position (a viewport with a negative origin clips the rest),
+// and each strip is pushed below the one before. With one strip this is a plain push.
+const int CANVAS_STRIP_H = CANVAS_H / CANVAS_STRIPS;
+
+template <typename Draw>
+inline void pushCanvas(int x, Draw draw) {
+    for (int s = 0; s < CANVAS_STRIPS; s++) {
+        int y0 = s * CANVAS_STRIP_H;
+        // The viewport must end at the strip's bottom edge: fillSprite() clears _yHeight
+        // rows with memset when the origin is 0, so a taller viewport would overrun the buffer
+        if (CANVAS_STRIPS > 1) canvas.setViewport(0, -y0, 320, y0 + CANVAS_STRIP_H);
+        draw();
+        if (CANVAS_STRIPS > 1) canvas.resetViewport();
+        canvas.pushSprite(x, CANVAS_Y + y0);
+    }
+}
+
 // Draws whatever should be on screen now (full-screen gauge, or page + tap menu)
 inline void drawCurrentScreen() {
-    if (fullScreenMetric >= 0) {
-        buildFullScreen(fullScreenMetric);
-    } else {
-        buildPage(currentPage);
-        if (menuMetric >= 0) drawTapMenu(menuMetric);
-        if (dtcDetail >= dtcShownCount()) dtcDetail = -1;   // the list changed under it
-        if (currentPage == PAGE_DTC && dtcDetail >= 0) drawDtcDetail();
-    }
-    canvas.pushSprite(0, CANVAS_Y);
+    if (dtcDetail >= dtcShownCount()) dtcDetail = -1;   // the list changed under it
+    pushCanvas(0, [] {
+        if (fullScreenMetric >= 0) {
+            buildFullScreen(fullScreenMetric);
+        } else {
+            buildPage(currentPage);
+            if (menuMetric >= 0) drawTapMenu(menuMetric);
+            if (currentPage == PAGE_DTC && dtcDetail >= 0) drawDtcDetail();
+        }
+    });
 }
 
 // Animates horizontal page swiping transitions (works offline too)
@@ -724,11 +743,8 @@ inline void scrollToNextPage() {
     logDebug("UI_NAV", "Triggering scroll: Swiping from Page " + String(currentPage) + " to Page " + String(nextPage));
 
     for (int offset = 0; offset <= 320; offset += 32) {
-        buildPage(currentPage);
-        canvas.pushSprite(offset, CANVAS_Y);
-
-        buildPage(nextPage);
-        canvas.pushSprite(offset - 320, CANVAS_Y);
+        pushCanvas(offset, [&] { buildPage(currentPage); });
+        pushCanvas(offset - 320, [&] { buildPage(nextPage); });
         delay(5);
     }
 

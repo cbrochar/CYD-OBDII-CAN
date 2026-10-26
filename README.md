@@ -493,7 +493,8 @@ Ford-specific PIDs.
 - **Bus errors:** if a request is never acknowledged (nothing on the bus) or the controller goes
   bus-off, it is restarted before the next request.
 - **Drawing:** the gauge area is a 320×214 8-bit sprite (about 67 KB) drawn off-screen and
-  pushed in one go, so updates don't flicker. Page changes slide horizontally.
+  pushed in one go, so updates don't flicker. Page changes slide horizontally. (`CANVAS_STRIPS`
+  in `config.h` can split it into strips to save RAM; the Bluetooth version uses two.)
 - **Debug log:** everything is logged over USB serial at 115200 with timestamps, e.g.
   `7E0 010C -> 410C0AD6` or `Page 0 refreshed in 20 ms`.
 

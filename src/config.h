@@ -36,6 +36,11 @@ const int TOUCH_RAW_Y_MIN = 240,  TOUCH_RAW_Y_MAX = 3800;
 // How long the tap menu (NEXT PAGE / FULL SCREEN) stays up if nothing is pressed
 const unsigned long MENU_TIMEOUT_MS = 4000;
 
+// The gauge area is drawn off-screen in CANVAS_STRIPS horizontal strips, each pushed to
+// the screen in turn. Fewer strips draw faster, more strips need less RAM. Here:
+// one full-size canvas: this version has RAM to spare.
+const int CANVAS_STRIPS = 1;
+
 // Display layout / paging
 const int METRICS_PER_PAGE = 4;   // 2 x 2 grid of cards
 const int METRIC_PAGES     = 3;   // card pages; must match the metric table in display_ui.h (12 metrics)

@@ -30,7 +30,7 @@ void setup() {
     sdBegin();   // not required: REC tries again, so a card can be inserted later
 
     canvas.setColorDepth(8);   // 8-bit sprite: 320x214 = ~67 KB instead of ~137 KB
-    if (canvas.createSprite(320, CANVAS_H) == nullptr) {
+    if (canvas.createSprite(320, CANVAS_STRIP_H) == nullptr) {   // CANVAS_STRIPS in config.h
         logDebug("GFX_FATAL", "Canvas sprite allocation failed (out of RAM)!");
     }
 

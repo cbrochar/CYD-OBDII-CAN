@@ -272,9 +272,15 @@ inline void handleUpdateDone() {
 }
 
 inline void wifiStart() {
+    logDebug("WIFI", "Starting hotspot (free heap " + String(ESP.getFreeHeap() / 1024) + " KB)");
+    WiFi.persistent(false);   // don't keep WiFi settings in flash (saves memory and flash writes)
     WiFi.mode(WIFI_AP);
     if (!WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD)) {
-        logDebug("WIFI", "Could not start the hotspot");
+        // Not retried every pass: switch the hotspot off and on again to retry
+        logDebug("WIFI", "Could not start the hotspot (free heap " + String(ESP.getFreeHeap() / 1024) +
+                         " KB). The Settings page shows FAILED; switch it off and on to retry.");
+        WiFi.mode(WIFI_OFF);
+        wifiStartFailed = true;
         return;
     }
     static bool routesAdded = false;   // the hotspot can be switched off and on again
@@ -293,7 +299,8 @@ inline void wifiStart() {
     }
     webServer.begin();
     wifiRunning = true;
-    logDebug("WIFI", "Hotspot on: join '" + String(WIFI_AP_SSID) + "', then open http://" + WiFi.softAPIP().toString());
+    logDebug("WIFI", "Hotspot on: join '" + String(WIFI_AP_SSID) + "', then open http://" + WiFi.softAPIP().toString() +
+                     " (free heap " + String(ESP.getFreeHeap() / 1024) + " KB)");
 }
 
 inline void wifiStop() {
@@ -306,9 +313,9 @@ inline void wifiStop() {
 
 // Call on every loop() pass: follows the Settings page switch and answers requests
 inline void wifiTick() {
-    if (settings.wifiOn != wifiRunning) {
-        if (settings.wifiOn) wifiStart(); else wifiStop();
-    }
+    if (!settings.wifiOn) wifiStartFailed = false;   // switching it off clears a failure
+    if (settings.wifiOn && !wifiRunning && !wifiStartFailed) wifiStart();
+    else if (!settings.wifiOn && wifiRunning) wifiStop();
     if (wifiRunning) webServer.handleClient();
 }
 
